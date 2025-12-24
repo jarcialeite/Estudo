@@ -1,0 +1,49 @@
+Act as a Senior Python Developer. Create a Streamlit application integrated with Google Sheets to serve as an Active Recall Study Tool.
+
+### Objective
+The app allows the user to review study questions stored in a Google Sheet, type an answer, compare it with the correct answer using fuzzy string matching, and save the result back to the sheet.
+
+### Data Structure (Google Sheets)
+The Google Sheet has the following columns:
+1. "Assunto" (Subject)
+2. "Pergunta" (Question)
+3. "Resposta" (Answer - Reference)
+4. "Resultado" (Result - To be updated)
+5. "Data" (Date - To be updated)
+
+### Features & Logic
+1. **Google Sheets Connection:**
+   - Use `gspread` and `oauth2client`.
+   - Load credentials from `st.secrets` (key: "gcp_service_account").
+   - Load the worksheet data into a Pandas DataFrame.
+
+2. **Quiz Interface (Streamlit):**
+   - Use `st.session_state` to manage the current question index to avoid reloading the app randomly.
+   - Display the "Assunto" and "Pergunta" of the current row.
+   - Provide a text area (`st.text_area`) for the user to type their answer.
+
+3. **Evaluation Logic:**
+   - When the user clicks "Enviar Resposta":
+     - Compare the user's input with the reference "Resposta" using the `thefuzz` library (token_sort_ratio).
+     - Display the Similarity Score (0-100%).
+     - Show the correct "Resposta" for comparison.
+     - Provide two buttons for final decision: "Acertei" (Correct) or "Errei" (Incorrect). *Note: The user decides the final result based on the similarity score, as legal concepts require nuance.*
+
+4. **Persistence:**
+   - If "Acertei" or "Errei" is clicked:
+     - Update the "Resultado" column in the Google Sheet for that specific row with the status.
+     - Update the "Data" column with the current timestamp.
+     - Automatically move to the next question.
+
+### Dependencies
+Create a `requirements.txt` with:
+- streamlit
+- pandas
+- gspread
+- oauth2client
+- thefuzz
+
+### Important Code Structure
+- Ensure the app handles empty rows or end of list gracefully.
+- Use distinct visual feedbacks (st.success for high similarity, st.warning for low).
+- Do not hardcode credentials; rely strictly on `st.secrets`.
