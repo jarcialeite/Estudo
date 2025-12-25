@@ -1,13 +1,17 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 from thefuzz import fuzz
+import matplotlib.pyplot as plt
+import streamlit.components.v1 as components
+from openai import OpenAI
 from google_sheets_auth import get_gspread_client
 
 st.set_page_config(
-    page_title="Active Recall Study Tool",
+    page_title="Study Station LMS",
     page_icon="📚",
-    layout="centered"
+    layout="wide"
 )
 
 SHEETS_MAPPING = {
@@ -21,28 +25,57 @@ SHEETS_MAPPING = {
     "Inglês": "https://docs.google.com/spreadsheets/d/12VQFmP_42aKJIN2he4HzPobl79_icS0yqy5G4AZD_P4/edit?usp=drive_link"
 }
 
-if 'question_index' not in st.session_state:
-    st.session_state.question_index = 0
-if 'show_result' not in st.session_state:
-    st.session_state.show_result = False
-if 'user_answer' not in st.session_state:
-    st.session_state.user_answer = ""
-if 'similarity_score' not in st.session_state:
-    st.session_state.similarity_score = 0
-if 'filtered_df' not in st.session_state:
-    st.session_state.filtered_df = None
-if 'worksheet' not in st.session_state:
-    st.session_state.worksheet = None
-if 'selected_disciplina' not in st.session_state:
-    st.session_state.selected_disciplina = None
-if 'selected_tema' not in st.session_state:
-    st.session_state.selected_tema = None
-if 'selected_assunto' not in st.session_state:
-    st.session_state.selected_assunto = None
-if 'original_df' not in st.session_state:
-    st.session_state.original_df = None
-if 'row_mapping' not in st.session_state:
-    st.session_state.row_mapping = []
+TRILHA_SHEET_URL = "https://docs.google.com/spreadsheets/d/1qb9d3qNAJBfcluxTHNsdRDdE1pZW7LS0EyzHlobRVDk/edit?usp=drive_link"
+
+
+def check_password():
+    """Check if password is correct."""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    
+    if st.session_state.authenticated:
+        return True
+    
+    try:
+        app_password = st.secrets.get("app_password", "")
+        if not app_password:
+            return True
+    except:
+        return True
+    
+    password = st.text_input("Digite a senha para acessar:", type="password")
+    if st.button("Entrar"):
+        if password == app_password:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Senha incorreta!")
+    return False
+
+
+def init_session_state():
+    """Initialize all session state variables."""
+    defaults = {
+        'question_index': 0,
+        'show_result': False,
+        'user_answer': "",
+        'similarity_score': 0,
+        'filtered_df': None,
+        'worksheet': None,
+        'selected_disciplina': None,
+        'selected_tema': None,
+        'selected_assunto': None,
+        'original_df': None,
+        'row_mapping': [],
+        'timer_running': False,
+        'timer_start': None,
+        'study_mode': "Perguntas",
+        'essay_text': "",
+        'voice_text': ""
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
 @st.cache_data(ttl=300)
@@ -53,7 +86,7 @@ def get_worksheet_titles(sheet_url):
         spreadsheet = client.open_by_url(sheet_url)
         return [ws.title for ws in spreadsheet.worksheets()]
     except Exception as e:
-        st.error(f"Error loading worksheets: {str(e)}")
+        st.error(f"Erro ao carregar abas: {str(e)}")
         return []
 
 
@@ -68,7 +101,7 @@ def load_worksheet_data(sheet_url, worksheet_title):
         df = pd.DataFrame(data)
         return df
     except Exception as e:
-        st.error(f"Error loading worksheet data: {str(e)}")
+        st.error(f"Erro ao carregar dados: {str(e)}")
         return None
 
 
@@ -79,8 +112,114 @@ def get_worksheet_for_update(sheet_url, worksheet_title):
         spreadsheet = client.open_by_url(sheet_url)
         return spreadsheet.worksheet(worksheet_title)
     except Exception as e:
-        st.error(f"Error accessing worksheet: {str(e)}")
+        st.error(f"Erro ao acessar planilha: {str(e)}")
         return None
+
+
+def get_or_create_log_worksheet(sheet_url):
+    """Get or create Log_Estudos worksheet."""
+    try:
+        client = get_gspread_client()
+        spreadsheet = client.open_by_url(sheet_url)
+        try:
+            worksheet = spreadsheet.worksheet("Log_Estudos")
+        except:
+            worksheet = spreadsheet.add_worksheet(title="Log_Estudos", rows=1000, cols=3)
+            worksheet.update(values=[['Data', 'Disciplina', 'Minutos']], range_name='A1:C1')
+        return worksheet
+    except Exception as e:
+        st.error(f"Erro ao acessar Log_Estudos: {str(e)}")
+        return None
+
+
+def save_study_log(disciplina, minutes):
+    """Save study time to Log_Estudos."""
+    try:
+        worksheet = get_or_create_log_worksheet(TRILHA_SHEET_URL)
+        if worksheet:
+            today = datetime.now().strftime("%Y-%m-%d")
+            worksheet.append_row([today, disciplina, minutes])
+            return True
+    except Exception as e:
+        st.error(f"Erro ao salvar log: {str(e)}")
+    return False
+
+
+def get_study_logs():
+    """Get study logs for the last 7 days."""
+    try:
+        worksheet = get_or_create_log_worksheet(TRILHA_SHEET_URL)
+        if worksheet:
+            data = worksheet.get_all_records()
+            if data:
+                df = pd.DataFrame(data)
+                df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+                seven_days_ago = datetime.now() - timedelta(days=7)
+                df = df[df['Data'] >= seven_days_ago]
+                return df
+    except:
+        pass
+    return pd.DataFrame(columns=['Data', 'Disciplina', 'Minutos'])
+
+
+def get_today_study_time():
+    """Get total study time for today."""
+    try:
+        df = get_study_logs()
+        if not df.empty:
+            today = datetime.now().strftime("%Y-%m-%d")
+            today_df = df[df['Data'].dt.strftime("%Y-%m-%d") == today]
+            return int(today_df['Minutos'].sum())
+    except:
+        pass
+    return 0
+
+
+def get_trilha_data():
+    """Get Trilha worksheet data."""
+    try:
+        client = get_gspread_client()
+        spreadsheet = client.open_by_url(TRILHA_SHEET_URL)
+        try:
+            worksheet = spreadsheet.worksheet("Trilha")
+            data = worksheet.get_all_records()
+            return pd.DataFrame(data), worksheet
+        except:
+            return None, None
+    except Exception as e:
+        return None, None
+
+
+def get_next_mission(df):
+    """Find first row where Status is not 'sim'."""
+    if df is None or df.empty:
+        return None, None
+    
+    status_col = None
+    for col in df.columns:
+        if 'status' in col.lower():
+            status_col = col
+            break
+    
+    if status_col is None and len(df.columns) >= 4:
+        status_col = df.columns[3]
+    
+    if status_col:
+        for idx, row in df.iterrows():
+            status_val = str(row.get(status_col, '')).lower().strip()
+            if status_val != 'sim':
+                return idx, row
+    return None, None
+
+
+def complete_mission(worksheet, row_idx):
+    """Mark mission as complete."""
+    try:
+        worksheet.update_cell(row_idx + 2, 4, "sim")
+        worksheet.update_cell(row_idx + 2, 5, datetime.now().strftime("%Y-%m-%d"))
+        return True
+    except:
+        return False
 
 
 def update_sheet(worksheet, original_row_index, resultado, data):
@@ -90,7 +229,7 @@ def update_sheet(worksheet, original_row_index, resultado, data):
         worksheet.update_cell(original_row_index + 2, 5, data)
         return True
     except Exception as e:
-        st.error(f"Error updating sheet: {str(e)}")
+        st.error(f"Erro ao atualizar planilha: {str(e)}")
         return False
 
 
@@ -100,6 +239,7 @@ def reset_quiz_state():
     st.session_state.show_result = False
     st.session_state.user_answer = ""
     st.session_state.similarity_score = 0
+    st.session_state.voice_text = ""
 
 
 def next_question():
@@ -108,6 +248,7 @@ def next_question():
     st.session_state.show_result = False
     st.session_state.user_answer = ""
     st.session_state.similarity_score = 0
+    st.session_state.voice_text = ""
 
 
 def record_result(resultado):
@@ -124,65 +265,205 @@ def record_result(resultado):
         next_question()
 
 
-st.title("Active Recall Study Tool")
+def get_ai_response(question):
+    """Get response from OpenAI."""
+    try:
+        client = OpenAI(
+            api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY"),
+            base_url=os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+        )
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Você é um assistente de estudos especializado em concursos públicos brasileiros. Responda de forma clara e concisa."},
+                {"role": "user", "content": question}
+            ],
+            max_tokens=500
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Erro ao consultar IA: {str(e)}"
 
-with st.sidebar:
-    st.header("Configuração")
+
+def render_sidebar():
+    """Render sidebar with timer, Spotify, and AI consultant."""
+    with st.sidebar:
+        st.header("Study Station")
+        
+        with st.expander("Cronômetro de Estudos", expanded=True):
+            tab1, tab2 = st.tabs(["Cronômetro", "Manual"])
+            
+            with tab1:
+                today_time = get_today_study_time()
+                st.metric("Tempo Total Hoje", f"{today_time} min")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if not st.session_state.timer_running:
+                        if st.button("Iniciar", use_container_width=True):
+                            st.session_state.timer_running = True
+                            st.session_state.timer_start = datetime.now()
+                            st.rerun()
+                    else:
+                        st.info(f"Em andamento...")
+                
+                with col2:
+                    if st.session_state.timer_running:
+                        if st.button("Parar", use_container_width=True):
+                            if st.session_state.timer_start:
+                                delta = datetime.now() - st.session_state.timer_start
+                                total_seconds = delta.total_seconds()
+                                minutes = max(1, int((total_seconds + 30) / 60))
+                                disciplina = st.session_state.selected_disciplina or "Geral"
+                                save_study_log(disciplina, minutes)
+                                st.success(f"Registrado: {minutes} min")
+                            st.session_state.timer_running = False
+                            st.session_state.timer_start = None
+                            st.rerun()
+                
+                logs_df = get_study_logs()
+                if not logs_df.empty:
+                    daily_sum = logs_df.groupby(logs_df['Data'].dt.strftime("%m/%d"))['Minutos'].sum()
+                    if not daily_sum.empty:
+                        fig, ax = plt.subplots(figsize=(4, 2))
+                        daily_sum.plot(kind='bar', ax=ax, color='#1f77b4')
+                        ax.set_xlabel('')
+                        ax.set_ylabel('Min')
+                        ax.tick_params(axis='x', rotation=45)
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        plt.close()
+            
+            with tab2:
+                manual_minutes = st.number_input("Minutos estudados", min_value=1, max_value=480, value=30)
+                manual_date = st.date_input("Data", value=datetime.now())
+                manual_disciplina = st.selectbox("Disciplina", options=list(SHEETS_MAPPING.keys()), key="manual_disc")
+                
+                if st.button("Registrar", use_container_width=True):
+                    try:
+                        worksheet = get_or_create_log_worksheet(TRILHA_SHEET_URL)
+                        if worksheet:
+                            worksheet.append_row([manual_date.strftime("%Y-%m-%d"), manual_disciplina, manual_minutes])
+                            st.success("Registrado!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro: {str(e)}")
+        
+        with st.expander("Spotify - Petit Journal"):
+            components.iframe(
+                "https://open.spotify.com/embed/show/6e4f3s9tFpM0fQ2lqQ2lqQ",
+                height=152
+            )
+        
+        with st.expander("Consultor IA"):
+            ai_question = st.text_area("Dúvida Rápida", placeholder="Digite sua pergunta...", height=100, key="ai_question")
+            if st.button("Perguntar", use_container_width=True):
+                if ai_question.strip():
+                    with st.spinner("Consultando..."):
+                        response = get_ai_response(ai_question)
+                        st.markdown("**Resposta:**")
+                        st.markdown(response)
+                else:
+                    st.warning("Digite uma pergunta.")
+
+
+def render_trilha_dashboard():
+    """Render the Trilha dashboard showing next mission."""
+    st.subheader("Trilha - Próxima Missão")
     
-    disciplinas = list(SHEETS_MAPPING.keys())
-    selected_disciplina = st.selectbox(
-        "Selecione a disciplina",
-        options=disciplinas,
-        index=0,
-        key="disciplina_select"
-    )
+    df, worksheet = get_trilha_data()
     
-    if selected_disciplina != st.session_state.selected_disciplina:
-        st.session_state.selected_disciplina = selected_disciplina
-        st.session_state.selected_tema = None
-        st.session_state.selected_assunto = None
-        st.session_state.original_df = None
-        st.session_state.filtered_df = None
-        st.session_state.worksheet = None
-        reset_quiz_state()
-        load_worksheet_data.clear()
-        get_worksheet_titles.clear()
+    if df is None or df.empty:
+        st.info("Nenhuma trilha configurada ou planilha 'Trilha' não encontrada.")
+        return
+    
+    idx, mission = get_next_mission(df)
+    
+    if mission is None:
+        st.success("Todas as missões foram concluídas!")
+        return
+    
+    desc_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
+    disc_col = df.columns[2] if len(df.columns) > 2 else desc_col
+    
+    description = mission.get(desc_col, "Sem descrição")
+    disciplina = mission.get(disc_col, "")
+    
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.markdown(f"**{description}** ({disciplina})")
+    with col2:
+        if st.button("Concluir", key="complete_mission"):
+            if complete_mission(worksheet, idx):
+                st.success("Missão concluída!")
+                st.rerun()
+            else:
+                st.error("Erro ao concluir missão")
+
+
+def render_study_content():
+    """Render the main study content area."""
+    st.subheader("Material de Estudo")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        disciplinas = list(SHEETS_MAPPING.keys())
+        selected_disciplina = st.selectbox(
+            "Selecione a disciplina",
+            options=disciplinas,
+            index=0,
+            key="disciplina_select"
+        )
+        
+        if selected_disciplina != st.session_state.selected_disciplina:
+            st.session_state.selected_disciplina = selected_disciplina
+            st.session_state.selected_tema = None
+            st.session_state.selected_assunto = None
+            st.session_state.original_df = None
+            st.session_state.filtered_df = None
+            st.session_state.worksheet = None
+            reset_quiz_state()
+            load_worksheet_data.clear()
+            get_worksheet_titles.clear()
     
     sheet_url = SHEETS_MAPPING[selected_disciplina]
     worksheet_titles = get_worksheet_titles(sheet_url)
     
-    if worksheet_titles:
-        selected_tema = st.selectbox(
-            "Selecione o tema",
-            options=worksheet_titles,
-            index=0,
-            key="tema_select"
-        )
-        
-        if selected_tema != st.session_state.selected_tema:
-            st.session_state.selected_tema = selected_tema
-            st.session_state.selected_assunto = None
-            st.session_state.original_df = None
-            st.session_state.filtered_df = None
-            reset_quiz_state()
-            load_worksheet_data.clear()
-        
-        if st.session_state.original_df is None:
-            with st.spinner("Carregando dados..."):
-                df = load_worksheet_data(sheet_url, selected_tema)
-                if df is not None:
-                    required_columns = ['Assunto', 'Pergunta', 'Resposta', 'Resultado', 'Data']
-                    missing_columns = [col for col in required_columns if col not in df.columns]
-                    
-                    if missing_columns:
-                        st.error(f"Colunas faltando: {', '.join(missing_columns)}")
-                    else:
-                        st.session_state.original_df = df.copy()
-                        st.session_state.worksheet = get_worksheet_for_update(sheet_url, selected_tema)
-        
+    with col2:
+        if worksheet_titles:
+            selected_tema = st.selectbox(
+                "Selecione o tema",
+                options=worksheet_titles,
+                index=0,
+                key="tema_select"
+            )
+            
+            if selected_tema != st.session_state.selected_tema:
+                st.session_state.selected_tema = selected_tema
+                st.session_state.selected_assunto = None
+                st.session_state.original_df = None
+                st.session_state.filtered_df = None
+                reset_quiz_state()
+                load_worksheet_data.clear()
+    
+    if st.session_state.selected_tema and st.session_state.original_df is None:
+        with st.spinner("Carregando dados..."):
+            df = load_worksheet_data(sheet_url, st.session_state.selected_tema)
+            if df is not None:
+                required_columns = ['Assunto', 'Pergunta', 'Resposta', 'Resultado', 'Data']
+                missing_columns = [col for col in required_columns if col not in df.columns]
+                
+                if missing_columns:
+                    st.error(f"Colunas faltando: {', '.join(missing_columns)}")
+                else:
+                    st.session_state.original_df = df.copy()
+                    st.session_state.worksheet = get_worksheet_for_update(sheet_url, st.session_state.selected_tema)
+    
+    with col3:
         if st.session_state.original_df is not None:
             unique_assuntos = sorted(st.session_state.original_df['Assunto'].dropna().unique().tolist())
-            assunto_options = ["Tudo"] + unique_assuntos
+            assunto_options = ["Tudo"] + [str(a) for a in unique_assuntos]
             
             selected_assunto = st.selectbox(
                 "Escolha o assunto",
@@ -199,25 +480,39 @@ with st.sidebar:
                     st.session_state.filtered_df = st.session_state.original_df.reset_index(drop=True)
                     st.session_state.row_mapping = list(range(len(st.session_state.original_df)))
                 else:
-                    mask = st.session_state.original_df['Assunto'] == selected_assunto
+                    mask = st.session_state.original_df['Assunto'].astype(str) == selected_assunto
                     original_indices = st.session_state.original_df[mask].index.tolist()
                     st.session_state.filtered_df = st.session_state.original_df[mask].reset_index(drop=True)
                     st.session_state.row_mapping = original_indices
-            
-            st.divider()
-            st.subheader("Progresso")
-            if st.session_state.filtered_df is not None and len(st.session_state.filtered_df) > 0:
-                total = len(st.session_state.filtered_df)
-                current = st.session_state.question_index + 1
-                st.progress(min(current / total, 1.0))
-                st.caption(f"Questão {min(current, total)} de {total}")
-
-if st.session_state.filtered_df is None or len(st.session_state.filtered_df) == 0:
-    if st.session_state.original_df is None:
-        st.info("Selecione uma disciplina e tema na barra lateral para começar.")
+    
+    st.divider()
+    
+    mode_col1, mode_col2 = st.columns([1, 4])
+    with mode_col1:
+        study_mode = st.radio("Modo", ["Perguntas", "Dissertativo"], key="study_mode_radio")
+        st.session_state.study_mode = study_mode
+    
+    if st.session_state.filtered_df is None or len(st.session_state.filtered_df) == 0:
+        if st.session_state.original_df is None:
+            st.info("Selecione uma disciplina e tema para começar.")
+        else:
+            st.warning("Nenhuma questão encontrada com os filtros selecionados.")
+        return
+    
+    with mode_col2:
+        total = len(st.session_state.filtered_df)
+        current = st.session_state.question_index + 1
+        st.progress(min(current / total, 1.0))
+        st.caption(f"Questão {min(current, total)} de {total}")
+    
+    if study_mode == "Perguntas":
+        render_quiz_mode()
     else:
-        st.warning("Nenhuma questão encontrada com os filtros selecionados.")
-else:
+        render_essay_mode()
+
+
+def render_quiz_mode():
+    """Render the quiz mode interface."""
     df = st.session_state.filtered_df
     
     if st.session_state.question_index >= len(df):
@@ -227,69 +522,181 @@ else:
         if st.button("Recomeçar"):
             reset_quiz_state()
             st.rerun()
-    else:
-        current_row = df.iloc[st.session_state.question_index]
-        
-        st.subheader(f"Assunto: {current_row['Assunto']}")
-        
-        st.markdown("### Pergunta")
-        st.markdown(f"> {current_row['Pergunta']}")
-        
-        st.markdown("### Sua Resposta")
-        user_answer = st.text_area(
-            "Digite sua resposta aqui:",
-            value=st.session_state.user_answer,
-            height=150,
-            key="answer_input",
-            label_visibility="collapsed"
-        )
-        st.session_state.user_answer = user_answer
-        
-        if not st.session_state.show_result:
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                if st.button("Enviar Resposta", type="primary", use_container_width=True):
-                    if user_answer.strip():
-                        st.session_state.show_result = True
-                        st.rerun()
-                    else:
-                        st.warning("Por favor, digite uma resposta antes de enviar.")
-            with col2:
-                if st.button("Pular Questão", use_container_width=True):
-                    next_question()
+        return
+    
+    current_row = df.iloc[st.session_state.question_index]
+    
+    st.markdown(f"**Assunto:** {current_row['Assunto']}")
+    st.markdown("### Pergunta")
+    st.markdown(f"> {current_row['Pergunta']}")
+    
+    st.markdown("### Sua Resposta")
+    
+    input_method = st.radio("Método de entrada", ["Texto", "Voz"], horizontal=True, key="input_method")
+    
+    if input_method == "Voz":
+        try:
+            from audiorecorder import audiorecorder
+            import speech_recognition as sr
+            import tempfile
+            import wave
+            
+            audio = audiorecorder("Gravar", "Parar")
+            
+            if len(audio) > 0:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    audio.export(tmp_file.name, format="wav")
+                    tmp_path = tmp_file.name
+                
+                st.audio(tmp_path, format="audio/wav")
+                
+                if st.button("Transcrever"):
+                    with st.spinner("Transcrevendo..."):
+                        try:
+                            recognizer = sr.Recognizer()
+                            with sr.AudioFile(tmp_path) as source:
+                                audio_data = recognizer.record(source)
+                            text = recognizer.recognize_google(audio_data, language="pt-BR")
+                            st.session_state.voice_text = text
+                            st.session_state.user_answer = text
+                            st.rerun()
+                        except sr.UnknownValueError:
+                            st.error("Não foi possível entender o áudio. Tente novamente.")
+                        except sr.RequestError as e:
+                            st.error(f"Erro no serviço de transcrição: {str(e)}")
+                        except Exception as e:
+                            st.error(f"Erro na transcrição: {str(e)}")
+        except ImportError:
+            st.warning("Gravação de voz não disponível. Use entrada de texto.")
+        except Exception as e:
+            st.warning(f"Erro na gravação de voz: {str(e)}. Use entrada de texto.")
+    
+    user_answer = st.text_area(
+        "Digite sua resposta aqui:",
+        value=st.session_state.user_answer,
+        height=150,
+        key="answer_input",
+        label_visibility="collapsed"
+    )
+    st.session_state.user_answer = user_answer
+    
+    if not st.session_state.show_result:
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("Enviar Resposta", type="primary", use_container_width=True):
+                if user_answer.strip():
+                    st.session_state.show_result = True
                     st.rerun()
+                else:
+                    st.warning("Por favor, digite uma resposta antes de enviar.")
+        with col2:
+            if st.button("Pular Questão", use_container_width=True):
+                next_question()
+                st.rerun()
+    else:
+        reference_answer = str(current_row['Resposta'])
+        similarity = fuzz.token_sort_ratio(user_answer.lower(), reference_answer.lower())
+        st.session_state.similarity_score = similarity
+        
+        st.markdown("---")
+        st.markdown("### Avaliação")
+        
+        if similarity >= 80:
+            st.success(f"Pontuação de Similaridade: {similarity}%")
+        elif similarity >= 50:
+            st.warning(f"Pontuação de Similaridade: {similarity}%")
         else:
-            reference_answer = str(current_row['Resposta'])
-            similarity = fuzz.token_sort_ratio(user_answer.lower(), reference_answer.lower())
-            st.session_state.similarity_score = similarity
+            st.error(f"Pontuação de Similaridade: {similarity}%")
+        
+        st.markdown("### Resposta de Referência")
+        st.info(reference_answer)
+        
+        st.markdown("### Como você se saiu?")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("Acertei", type="primary", use_container_width=True):
+                record_result("Acertei")
+                st.rerun()
+        
+        with col2:
+            if st.button("Posso melhorar", use_container_width=True):
+                record_result("Posso melhorar")
+                st.rerun()
+        
+        with col3:
+            if st.button("Errei", use_container_width=True):
+                record_result("Errei")
+                st.rerun()
+
+
+def render_essay_mode():
+    """Render the essay/dissertativo mode interface."""
+    df = st.session_state.filtered_df
+    
+    st.markdown("### Modo Dissertativo")
+    st.markdown("Escreva uma redação sobre o assunto selecionado. O sistema verificará a cobertura dos conceitos.")
+    
+    essay = st.text_area(
+        "Sua redação:",
+        value=st.session_state.essay_text,
+        height=300,
+        key="essay_input"
+    )
+    st.session_state.essay_text = essay
+    
+    if st.button("Avaliar Cobertura", type="primary"):
+        if essay.strip():
+            all_answers = " ".join(df['Resposta'].astype(str).tolist())
+            
+            covered = []
+            not_covered = []
+            
+            for idx, row in df.iterrows():
+                answer = str(row['Resposta'])
+                similarity = fuzz.token_set_ratio(essay.lower(), answer.lower())
+                
+                if similarity >= 40:
+                    covered.append((row['Assunto'], answer[:50] + "...", similarity))
+                else:
+                    not_covered.append((row['Assunto'], answer[:50] + "..."))
             
             st.markdown("---")
-            st.markdown("### Avaliação")
+            st.markdown("### Resultado da Avaliação")
             
-            if similarity >= 80:
-                st.success(f"Pontuação de Similaridade: {similarity}%")
-            elif similarity >= 50:
-                st.warning(f"Pontuação de Similaridade: {similarity}%")
-            else:
-                st.error(f"Pontuação de Similaridade: {similarity}%")
+            coverage_pct = len(covered) / len(df) * 100 if len(df) > 0 else 0
+            st.metric("Cobertura", f"{coverage_pct:.1f}%")
             
-            st.markdown("### Resposta de Referência")
-            st.info(reference_answer)
+            if covered:
+                with st.expander(f"Conceitos abordados ({len(covered)})", expanded=True):
+                    for assunto, resp, sim in covered:
+                        st.markdown(f"- **{assunto}**: {resp} ({sim}%)")
             
-            st.markdown("### Como você se saiu?")
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if st.button("Acertei", type="primary", use_container_width=True, help="Acertei a resposta"):
-                    record_result("Acertei")
-                    st.rerun()
-            
-            with col2:
-                if st.button("Posso melhorar", use_container_width=True, help="Resposta parcial"):
-                    record_result("Posso melhorar")
-                    st.rerun()
-            
-            with col3:
-                if st.button("Errei", use_container_width=True, help="Errei a resposta"):
-                    record_result("Errei")
-                    st.rerun()
+            if not_covered:
+                with st.expander(f"Conceitos não abordados ({len(not_covered)})"):
+                    for assunto, resp in not_covered:
+                        st.markdown(f"- **{assunto}**: {resp}")
+        else:
+            st.warning("Escreva algo antes de avaliar.")
+
+
+def main():
+    """Main application entry point."""
+    if not check_password():
+        st.stop()
+    
+    init_session_state()
+    
+    render_sidebar()
+    
+    st.title("Study Station LMS")
+    
+    render_trilha_dashboard()
+    
+    st.divider()
+    
+    render_study_content()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,18 +1,20 @@
-# Active Recall Study Tool
+# Study Station LMS
 
 ## Overview
-A Streamlit-based study application that integrates with Google Sheets to provide an active recall learning experience. Users can review study questions, type their answers, compare them with reference answers using fuzzy string matching, and track their progress.
+A high-performance Streamlit-based Learning Management System (LMS) that integrates with Google Sheets for study tracking, active recall quizzes, and AI-powered study assistance.
 
 ## Features
-- Multiple discipline selection with predefined Google Sheets URLs
-- Dynamic worksheet (tema) loading from selected spreadsheet
-- Subject filtering ("Assunto") with "Tudo" option for all questions
-- Session state management with automatic reset on filter changes
-- Fuzzy string matching using thefuzz library (token_sort_ratio)
-- Three-tier evaluation system: "Acertei" (Correct), "Posso melhorar" (Can improve), "Errei" (Incorrect)
-- Automatic progress saving to Google Sheets with timestamps
-- Visual feedback with color-coded similarity scores
-- Caching for performance optimization with automatic invalidation
+
+### Sidebar Features
+- **Study Timer & History**: Stopwatch and manual entry for tracking study time with 7-day bar chart visualization
+- **Spotify Player**: Embedded Petit Journal podcast player
+- **AI Consultant**: OpenAI-powered quick question answering using gpt-4o-mini
+
+### Main Content
+- **Trilha Dashboard**: Shows next uncompleted mission from the Trilha worksheet
+- **Study Material**: Multi-level filtering (Discipline, Theme, Subject)
+- **Quiz Mode (Perguntas)**: Active recall with fuzzy matching, voice input support, and three-tier evaluation
+- **Essay Mode (Dissertativo)**: Coverage analysis against all answers for selected subject
 
 ## Available Disciplines
 - Direito
@@ -25,15 +27,22 @@ A Streamlit-based study application that integrates with Google Sheets to provid
 - Inglês
 
 ## Google Sheet Structure
-Each worksheet should have these columns:
+
+### Content Worksheets
 1. **Assunto** - Subject/Topic
 2. **Pergunta** - Question
 3. **Resposta** - Reference Answer
-4. **Resultado** - Result (updated by the app)
-5. **Data** - Date (updated by the app)
+4. **Resultado** - Result (updated by app)
+5. **Data** - Date (updated by app)
+
+### Trilha Worksheet
+Tracks study missions with Status column (set to "sim" when complete)
+
+### Log_Estudos Worksheet
+Auto-created to track study time with columns: Data, Disciplina, Minutos
 
 ## Project Structure
-- `app.py` - Main Streamlit application with quiz interface and filtering
+- `app.py` - Main Streamlit LMS application
 - `google_sheets_auth.py` - Google Sheets authentication using Replit connector
 - `.streamlit/config.toml` - Streamlit server configuration
 
@@ -41,6 +50,13 @@ Each worksheet should have these columns:
 ```bash
 streamlit run app.py --server.port 5000
 ```
+
+## Environment Variables (via Replit AI Integrations)
+- `AI_INTEGRATIONS_OPENAI_API_KEY` - OpenAI API key (auto-configured)
+- `AI_INTEGRATIONS_OPENAI_BASE_URL` - OpenAI base URL (auto-configured)
+
+## Optional Secrets
+- `app_password` - Optional password protection for the app
 
 ## Dependencies
 - streamlit
@@ -51,8 +67,12 @@ streamlit run app.py --server.port 5000
 - python-Levenshtein
 - requests
 - google-auth
+- openai
+- matplotlib
+- SpeechRecognition
+- streamlit-audiorecorder
 
 ## Recent Changes
+- 2024-12-25: Major rebuild as Study Station LMS with timer, Spotify, AI consultant, Trilha dashboard, quiz/essay modes
 - 2024-12-25: Added advanced filtering with discipline, tema, and assunto selection
-- 2024-12-25: Implemented caching with proper invalidation on filter changes
 - 2024-12-24: Initial creation of Active Recall Study Tool

@@ -8,7 +8,7 @@ channel = "stable-25_05"
 packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "pkg-config", "qhull", "tcl", "tk"]
 
 [agent]
-integrations = ["google-sheet:1.0.0"]
+integrations = ["google-sheet:1.0.0", "python_openai_ai_integrations:1.0.0"]
 
 [workflows]
 runButton = "Project"
