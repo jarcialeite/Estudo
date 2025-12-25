@@ -1,0 +1,19 @@
+Refactor the existing Streamlit app to include advanced filtering and navigation capabilities.
+
+### New Architecture Requirements
+
+**1. Subject Mapping (Hardcoded Dictionary)**
+Replace the single text input for the URL with a `st.selectbox` labeled "Selecione a disciplina".
+Use the following dictionary to map the selection to the specific Google Sheet URL:
+
+```python
+SHEETS_MAPPING = {
+    "Direito": "[https://docs.google.com/spreadsheets/d/1qb9d3qNAJBfcluxTHNsdRDdE1pZW7LS0EyzHlobRVDk/edit?usp=drive_link](https://docs.google.com/spreadsheets/d/1qb9d3qNAJBfcluxTHNsdRDdE1pZW7LS0EyzHlobRVDk/edit?usp=drive_link)",
+    "Geografia": "[https://docs.google.com/spreadsheets/d/1U8js8DcnpMwANwIoBCSlPgH0BPEx2nQwRSBVssflCDs/edit?usp=drive_link](https://docs.google.com/spreadsheets/d/1U8js8DcnpMwANwIoBCSlPgH0BPEx2nQwRSBVssflCDs/edit?usp=drive_link)",
+    "História Mundial": "[https://docs.google.com/spreadsheets/d/1XNhhnjlCp7xB3eCkwHyiG8_hPrmT4AXk-r_8YSsAYWg/edit?usp=sharing](https://docs.google.com/spreadsheets/d/1XNhhnjlCp7xB3eCkwHyiG8_hPrmT4AXk-r_8YSsAYWg/edit?usp=sharing)",
+    "História do Brasil": "[https://docs.google.com/spreadsheets/d/16LMjWZnez89To_0jNFWf_V9TcsKhUqTcxQP8VF1FL_8/edit?usp=sharing](https://docs.google.com/spreadsheets/d/16LMjWZnez89To_0jNFWf_V9TcsKhUqTcxQP8VF1FL_8/edit?usp=sharing)",
+    "Política Internacional": "[https://docs.google.com/spreadsheets/d/1uiXehNXzYwJ0BM8pLThfhcH7f7Cr4d7BhSQ3KO4mQEU/edit?usp=drive_link](https://docs.google.com/spreadsheets/d/1uiXehNXzYwJ0BM8pLThfhcH7f7Cr4d7BhSQ3KO4mQEU/edit?usp=drive_link)",
+    "Economia": "[https://docs.google.com/spreadsheets/d/1r3J0KnmoEs-pOD-oKuhogKGvMw7N26E1QeFENswEc3Y/edit?usp=drive_link](https://docs.google.com/spreadsheets/d/1r3J0KnmoEs-pOD-oKuhogKGvMw7N26E1QeFENswEc3Y/edit?usp=drive_link)",
+    "Francês": "[https://docs.google.com/spreadsheets/d/1O8aEGmkoXtpN0wLc0Uypk6D741Udk1V3XXUw0Wa25is/edit?usp=drive_link](https://docs.google.com/spreadsheets/d/1O8aEGmkoXtpN0wLc0Uypk6D741Udk1V3XXUw0Wa25is/edit?usp=drive_link)",
+    "Inglês": "[https://docs.google.com/spreadsheets/d/12VQFmP_42aKJIN2he4HzPobl79_icS0yqy5G4AZD_P4/edit?usp=drive_link](https://docs.google.com/spreadsheets/d/12VQFmP_42aKJIN2he4HzPobl79_icS0yqy5G4AZD_P4/edit?usp=drive_link)"
+}
