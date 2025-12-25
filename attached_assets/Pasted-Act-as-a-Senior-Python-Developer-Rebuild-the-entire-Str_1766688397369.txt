@@ -1,0 +1,73 @@
+Act as a Senior Python Developer. Rebuild the entire Streamlit application to function as a High-Performance Study Station (LMS).
+
+### 1. Project Setup & Dependencies
+Create `requirements.txt` with:
+- streamlit
+- pandas
+- gspread
+- oauth2client
+- thefuzz
+- SpeechRecognition
+- streamlit-audiorecorder
+- openai
+- matplotlib
+
+### 2. Global UI Structure
+- **Sidebar:** Contains the "Study Timer", "Spotify Player", and "AI Consultant".
+- **Main Area:** Contains the "Trilha Dashboard" (Top) and "Study Material/Quiz" (Bottom).
+
+### 3. Module: Security
+- On app load, check `st.secrets["app_password"]`. Stop execution if incorrect.
+
+### 4. Module: Sidebar Features
+
+**A. Study Timer & History (The "Aprovado" Logic)**
+- **Data Source:** Connect to the spreadsheet containing "Trilha". Look for (or create) a worksheet named "Log_Estudos" (Cols: Data, Disciplina, Minutos).
+- **Functionality:**
+  - **Tab 1 (Cronômetro):** "Start" stores timestamp in session state. "Stop" calculates delta in minutes. Save to "Log_Estudos".
+  - **Tab 2 (Manual):** Number input (minutes) + Date picker. Button "Registrar".
+- **Visualization:**
+  - Metric: "Tempo Total Hoje".
+  - Chart: Bar chart of study minutes for the last 7 days (grouped by Date).
+
+**B. Spotify Integration**
+- Embed an iframe player for the "Petit Journal" podcast.
+- Use `st.components.v1.iframe`.
+- URL: `https://open.spotify.com/embed/show/6e4f3s9tFpM0fQ2lqQ2lqQ` (or similar valid embed link for Petit Journal).
+
+**C. AI Consultant (ChatGPT)**
+- Input: Text Area "Dúvida Rápida".
+- Logic: Use `openai` library with `st.secrets["openai_api_key"]`. Model: `gpt-4o-mini`.
+- Output: Display the answer inside an expander so it doesn't clutter the view.
+
+### 5. Module: "Trilha" Dashboard (Next Action)
+- Connect to worksheet "Trilha".
+- Logic: Find the first row where Status (Col D) is NOT "sim".
+- Display: "Próxima Missão: [Descrição] ([Disciplina])".
+- Button "✅ Concluir": Updates Status to "sim", sets Date, and reruns the app.
+
+### 6. Module: Study Content (Main Navigation)
+
+**A. Selectors**
+- **Discipline:** Dropdown with specific Google Sheet URLs (Mapped via Dictionary).
+- **Theme:** Dropdown (List of Worksheet Titles from selected Sheet).
+- **Subject:** Dropdown (Unique values from Col A of selected Worksheet).
+
+**B. Study Modes**
+- **Mode 1: Perguntas (Quiz)**
+  - Filter rows by Subject (or All).
+  - Show Question. Hide Answer.
+  - **Input Method:**
+    - Option 1: Typing (Text Area).
+    - Option 2: Voice (Audio Recorder -> SpeechRecognition `pt-BR` -> Fill Text Area).
+  - **Validation:** Compare Input vs. Answer using `thefuzz`. Update Result in Sheet.
+
+- **Mode 2: Dissertativo (Essay)**
+  - User writes an essay on a specific Subject.
+  - App checks coverage against ALL answers for that subject.
+  - No write-back to sheets, just feedback.
+
+### 7. Technical Requirements
+- Use `st.session_state` to manage Timer state (running/stopped) and Navigation indices.
+- Handle API errors gracefully (OpenAI, Google API).
+- Ensure the app writes data to the correct worksheet ("Log_Estudos" vs "Trilha" vs Content Sheets).
