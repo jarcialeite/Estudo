@@ -38,16 +38,22 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- CONEXÃO UNIVERSAL (Replit & Streamlit Cloud) ---
+# --- CONEXÃO UNIVERSAL BLINDADA (Replit & Streamlit Cloud) ---
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
 def get_credentials():
-    # Tenta pegar do Streamlit Cloud (st.secrets)
-    if "gcp_service_account" in st.secrets:
-        return json.loads(st.secrets["gcp_service_account"])
-    # Tenta pegar do Replit (os.environ)
+    # 1. TENTA PRIMEIRO O REPLIT (Variáveis de Ambiente)
+    # Isso evita o erro de "secrets.toml not found"
     if "gcp_service_account" in os.environ:
         return json.loads(os.environ["gcp_service_account"])
+
+    # 2. SE FALHAR, TENTA O STREAMLIT CLOUD
+    try:
+        if "gcp_service_account" in st.secrets:
+            return json.loads(st.secrets["gcp_service_account"])
+    except:
+        pass # Se der erro aqui, é porque não estamos na nuvem, apenas ignora
+
     return None
 
 try:
@@ -56,16 +62,18 @@ try:
         creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
         gc = gspread.authorize(creds)
     else:
-        st.error("ERRO: Credenciais do Google não encontradas.")
+        # Se não achou em lugar nenhum, mostra erro amigável
+        st.error("⚠️ Configuração de Segurança não encontrada.")
+        st.info("No Replit: Adicione 'gcp_service_account' em Secrets (Cadeado).")
+        st.info("No Streamlit Cloud: Adicione em Settings > Secrets.")
         st.stop()
 except Exception as e:
-    st.error(f"Erro na autenticação: {e}")
+    st.error(f"Erro fatal na autenticação: {e}")
     st.stop()
 
 # Função auxiliar para garantir que o cliente esteja sempre disponível
 def get_gspread_client():
     return gc
-
 # Mapeamento das Disciplinas
 SHEETS_MAPPING = {
     "Direito": "https://docs.google.com/spreadsheets/d/1qb9d3qNAJBfcluxTHNsdRDdE1pZW7LS0EyzHlobRVDk/edit?usp=drive_link",
