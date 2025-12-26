@@ -38,22 +38,33 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- AUTENTICAÇÃO BLINDADA (Compatível com Replit Secrets) ---
+# --- CONEXÃO UNIVERSAL (Replit & Streamlit Cloud) ---
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
+def get_credentials():
+    # Tenta pegar do Streamlit Cloud (st.secrets)
+    if "gcp_service_account" in st.secrets:
+        return json.loads(st.secrets["gcp_service_account"])
+    # Tenta pegar do Replit (os.environ)
+    if "gcp_service_account" in os.environ:
+        return json.loads(os.environ["gcp_service_account"])
+    return None
+
 try:
-    # Lê as credenciais direto das variáveis de ambiente do Replit
-    key_dict = json.loads(os.environ["gcp_service_account"])
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
-    gc = gspread.authorize(creds)
+    key_dict = get_credentials()
+    if key_dict:
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
+        gc = gspread.authorize(creds)
+    else:
+        st.error("ERRO: Credenciais do Google não encontradas.")
+        st.stop()
 except Exception as e:
-    st.error(f"Erro fatal na autenticação: {e}")
+    st.error(f"Erro na autenticação: {e}")
     st.stop()
 
 # Função auxiliar para garantir que o cliente esteja sempre disponível
 def get_gspread_client():
     return gc
-# -----------------------------------------------------------
 
 # Mapeamento das Disciplinas
 SHEETS_MAPPING = {
