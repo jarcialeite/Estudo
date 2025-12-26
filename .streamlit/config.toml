@@ -1,4 +1,13 @@
+[theme]
+primaryColor = "#B86E7E"
+backgroundColor = "#FFFEFA"
+secondaryBackgroundColor = "#F9F2F4"
+textColor = "#2C3E50"
+font = "serif"
+
 [server]
 headless = true
 address = "0.0.0.0"
 port = 5000
+enableCORS = false
+enableXsrfProtection = false
