@@ -1,0 +1,43 @@
+Act as a Senior Python Developer. Refactor the existing `main.py` code to add advanced review features, dynamic column management, and data aggregation.
+
+### Context
+I have a Streamlit LMS app integrated with Google Sheets. I need to enhance the "Quiz Mode" to support better revision tracking, data persistence, and advanced filtering.
+
+### Key Requirements (Must Implement)
+
+1.  **Dynamic "My Answer" Column Storage:**
+    - In the Google Sheet, check if a column named "Minha_Resposta" exists (after "Data").
+    - If it doesn't exist, create it programmatically in the header.
+    - When the user clicks "Acertei/Errei/Posso melhorar", save the text from the input field into this "Minha_Resposta" column for that specific row, in addition to updating "Resultado" and "Data".
+    - **UX:** After saving, clear the `st.text_area` (reset `user_answer` to empty) so the next question starts blank.
+
+2.  **"Jump to Question" Navigation:**
+    - Above the question display, add a `st.number_input` labeled "Ir para questão nº".
+    - Updating this number should immediately change `st.session_state.question_index` to allow random access within the filtered list.
+
+3.  **Review Metadata Display:**
+    - **Per Question:** Before showing the question text, display: "Última revisão: [Data]" and "Último resultado: [Status]" (if available in the dataframe).
+    - **Per Theme:** When a Theme is selected, display a metric at the top: "Visto pela última vez em: [Data of the most recent entry in the whole sheet]".
+
+4.  **"All Themes" Aggregation:**
+    - In the "Selecione o tema" dropdown, add an option "Todos" at the beginning.
+    - **Logic:** If "Todos" is selected, iterate through ALL worksheets of the selected Discipline. Load data from all of them into a single concatenated DataFrame.
+    - **Crucial:** You must add a helper column to this concatenated DataFrame (e.g., `_source_sheet`) to track which worksheet each row came from, so the write-back function updates the correct tab.
+
+5.  **Advanced Filtering System (Sidebar or Expander):**
+    - Create a filter section for the questions.
+    - **Status Filter:** Multiselect options: ["Nunca respondidas", "Acertei", "Errei", "Posso melhorar"].
+        - *Logic:* "Nunca respondidas" means 'Resultado' is empty or null.
+    - **Recency Filter:** Selectbox options: ["Todas", "Hoje", "Esta Semana", "Este Mês", "Há mais de 2 meses"].
+        - *Logic:* Parse the "Data" column (format `%Y-%m-%d %H:%M:%S`) and compare with `datetime.now()`.
+
+6.  **Voice-to-Text Integration:**
+    - Ensure the transcribed text from `audiorecorder` populates the `user_answer` session state variable so it appears in the text area for editing before submission. It must be saved to the "Minha_Resposta" column upon submission.
+
+### Technical Implementation Details
+- **Column Indexing:** Do not rely on hardcoded column indices (e.g., column 4 or 5) for updates, as the new "Minha_Resposta" column might shift things. Find the column index dynamically by header name.
+- **State Management:** When filters change (Status/Recency), reset `question_index` to 0.
+- **Error Handling:** Handle cases where "Data" might be empty string when parsing dates for filters.
+
+### Reference Code
+Use the existing `main.py` provided in the context as the base and apply these changes. Keep the "Blindada" authentication logic exactly as is.

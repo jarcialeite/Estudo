@@ -82,16 +82,21 @@ def init_session_state():
         'similarity_score': 0,
         'filtered_df': None,
         'worksheet': None,
+        'worksheets_map': {},
         'selected_disciplina': None,
         'selected_tema': None,
         'selected_assunto': None,
         'original_df': None,
         'row_mapping': [],
+        'source_sheet_mapping': [],
         'timer_running': False,
         'timer_start': None,
         'study_mode': "Perguntas",
         'essay_text': "",
-        'voice_text': ""
+        'voice_text': "",
+        'status_filter': [],
+        'recency_filter': "Todas",
+        'jump_to_question': 1
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -131,6 +136,122 @@ def get_worksheet_for_update(sheet_url, worksheet_title):
     except Exception as e:
         st.error(f"Erro ao acessar planilha: {str(e)}")
         return None
+
+def ensure_minha_resposta_column(worksheet):
+    """Ensure 'Minha_Resposta' column exists after 'Data' column."""
+    try:
+        headers = worksheet.row_values(1)
+        if 'Minha_Resposta' not in headers:
+            if 'Data' in headers:
+                data_idx = headers.index('Data')
+                new_col_idx = data_idx + 2
+            else:
+                new_col_idx = len(headers) + 1
+            worksheet.update_cell(1, new_col_idx, 'Minha_Resposta')
+            return new_col_idx
+        else:
+            return headers.index('Minha_Resposta') + 1
+    except Exception as e:
+        st.error(f"Erro ao criar coluna Minha_Resposta: {str(e)}")
+        return None
+
+def get_column_index(worksheet, column_name):
+    """Get 1-based column index by header name."""
+    try:
+        headers = worksheet.row_values(1)
+        if column_name in headers:
+            return headers.index(column_name) + 1
+        return None
+    except:
+        return None
+
+def load_all_worksheets_data(sheet_url):
+    """Load data from ALL worksheets and concatenate with source tracking."""
+    try:
+        client = get_gspread_client()
+        spreadsheet = client.open_by_url(sheet_url)
+        all_dfs = []
+        worksheets_map = {}
+        
+        for ws in spreadsheet.worksheets():
+            try:
+                data = ws.get_all_records()
+                if data:
+                    df = pd.DataFrame(data)
+                    required_cols = ['Assunto', 'Pergunta', 'Resposta', 'Resultado', 'Data']
+                    if all(col in df.columns for col in required_cols):
+                        df['_source_sheet'] = ws.title
+                        df['_original_row_idx'] = list(range(len(df)))
+                        all_dfs.append(df)
+                        worksheets_map[ws.title] = ws
+            except:
+                continue
+        
+        if all_dfs:
+            combined_df = pd.concat(all_dfs, ignore_index=True)
+            return combined_df, worksheets_map
+        return None, {}
+    except Exception as e:
+        st.error(f"Erro ao carregar todas as abas: {str(e)}")
+        return None, {}
+
+def apply_status_filter(df, status_filter):
+    """Apply status filter to dataframe."""
+    if not status_filter:
+        return df
+    
+    masks = []
+    for status in status_filter:
+        if status == "Nunca respondidas":
+            masks.append(df['Resultado'].isna() | (df['Resultado'].astype(str).str.strip() == ''))
+        else:
+            masks.append(df['Resultado'].astype(str) == status)
+    
+    if masks:
+        combined_mask = masks[0]
+        for m in masks[1:]:
+            combined_mask = combined_mask | m
+        return df[combined_mask]
+    return df
+
+def apply_recency_filter(df, recency_filter):
+    """Apply recency filter based on 'Data' column."""
+    if recency_filter == "Todas":
+        return df
+    
+    now = datetime.now()
+    df_copy = df.copy()
+    
+    df_copy['_parsed_date'] = pd.to_datetime(df_copy['Data'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+    
+    if recency_filter == "Hoje":
+        start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        mask = df_copy['_parsed_date'] >= start_date
+    elif recency_filter == "Esta Semana":
+        start_date = now - timedelta(days=7)
+        mask = df_copy['_parsed_date'] >= start_date
+    elif recency_filter == "Este Mês":
+        start_date = now - timedelta(days=30)
+        mask = df_copy['_parsed_date'] >= start_date
+    elif recency_filter == "Há mais de 2 meses":
+        cutoff_date = now - timedelta(days=60)
+        mask = (df_copy['_parsed_date'] < cutoff_date) | df_copy['_parsed_date'].isna()
+    else:
+        mask = pd.Series([True] * len(df_copy))
+    
+    result = df_copy[mask].drop(columns=['_parsed_date'], errors='ignore')
+    return result
+
+def get_theme_last_review_date(df):
+    """Get the most recent review date from the dataframe."""
+    try:
+        dates = pd.to_datetime(df['Data'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+        valid_dates = dates.dropna()
+        if len(valid_dates) > 0:
+            return valid_dates.max().strftime("%Y-%m-%d")
+    except:
+        pass
+    return None
 
 def get_or_create_log_worksheet(sheet_url):
     """Get or create Log_Estudos worksheet."""
@@ -238,11 +359,27 @@ def complete_mission(worksheet, row_idx):
         st.error(f"Erro ao salvar conclusão: {e}")
         return False
 
-def update_sheet(worksheet, original_row_index, resultado, data):
-    """Update the Google Sheet with the result and date."""
+def update_sheet(worksheet, original_row_index, resultado, data, minha_resposta=None):
+    """Update the Google Sheet with the result, date, and user answer."""
     try:
-        worksheet.update_cell(original_row_index + 2, 4, resultado)
-        worksheet.update_cell(original_row_index + 2, 5, data)
+        resultado_col = get_column_index(worksheet, 'Resultado')
+        data_col = get_column_index(worksheet, 'Data')
+        
+        if resultado_col:
+            worksheet.update_cell(original_row_index + 2, resultado_col, resultado)
+        else:
+            worksheet.update_cell(original_row_index + 2, 4, resultado)
+        
+        if data_col:
+            worksheet.update_cell(original_row_index + 2, data_col, data)
+        else:
+            worksheet.update_cell(original_row_index + 2, 5, data)
+        
+        if minha_resposta is not None:
+            minha_col = ensure_minha_resposta_column(worksheet)
+            if minha_col:
+                worksheet.update_cell(original_row_index + 2, minha_col, minha_resposta)
+        
         return True
     except Exception as e:
         st.error(f"Erro ao atualizar planilha: {str(e)}")
@@ -267,14 +404,23 @@ def next_question():
 def record_result(resultado):
     """Record the result and move to the next question."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    original_row_index = st.session_state.row_mapping[st.session_state.question_index]
+    user_answer = st.session_state.user_answer
+    current_row = st.session_state.filtered_df.iloc[st.session_state.question_index]
+    
+    worksheet_to_use = st.session_state.worksheet
+    original_row_index = st.session_state.row_mapping[st.session_state.question_index] if st.session_state.question_index < len(st.session_state.row_mapping) else 0
+    
+    if st.session_state.selected_tema == "Todos" and st.session_state.worksheets_map:
+        source_sheet_name = current_row.get('_source_sheet', '')
+        original_row_index = int(current_row.get('_original_row_idx', 0))
+        worksheet_to_use = st.session_state.worksheets_map.get(source_sheet_name)
 
-    if update_sheet(st.session_state.worksheet, original_row_index, resultado, timestamp):
+    if worksheet_to_use and update_sheet(worksheet_to_use, original_row_index, resultado, timestamp, user_answer):
         st.session_state.filtered_df.at[st.session_state.question_index, 'Resultado'] = resultado
         st.session_state.filtered_df.at[st.session_state.question_index, 'Data'] = timestamp
-        if st.session_state.original_df is not None:
-            st.session_state.original_df.at[original_row_index, 'Resultado'] = resultado
-            st.session_state.original_df.at[original_row_index, 'Data'] = timestamp
+        if 'Minha_Resposta' not in st.session_state.filtered_df.columns:
+            st.session_state.filtered_df['Minha_Resposta'] = ''
+        st.session_state.filtered_df.at[st.session_state.question_index, 'Minha_Resposta'] = user_answer
         next_question()
 
 def get_ai_response(question):
@@ -431,6 +577,7 @@ def render_study_content():
             st.session_state.original_df = None
             st.session_state.filtered_df = None
             st.session_state.worksheet = None
+            st.session_state.worksheets_map = {}
             reset_quiz_state()
             load_worksheet_data.clear()
             get_worksheet_titles.clear()
@@ -440,9 +587,10 @@ def render_study_content():
 
     with col2:
         if worksheet_titles:
+            tema_options = ["Todos"] + worksheet_titles
             selected_tema = st.selectbox(
                 "Selecione o tema",
-                options=worksheet_titles,
+                options=tema_options,
                 index=0,
                 key="tema_select"
             )
@@ -452,25 +600,61 @@ def render_study_content():
                 st.session_state.selected_assunto = None
                 st.session_state.original_df = None
                 st.session_state.filtered_df = None
+                st.session_state.worksheets_map = {}
+                st.session_state.source_sheet_mapping = []
                 reset_quiz_state()
                 load_worksheet_data.clear()
 
     if st.session_state.selected_tema and st.session_state.original_df is None:
         with st.spinner("Carregando dados..."):
-            df = load_worksheet_data(sheet_url, st.session_state.selected_tema)
-            if df is not None:
-                required_columns = ['Assunto', 'Pergunta', 'Resposta', 'Resultado', 'Data']
-                missing_columns = [col for col in required_columns if col not in df.columns]
-
-                if missing_columns:
-                    st.error(f"Colunas faltando: {', '.join(missing_columns)}")
-                else:
+            if st.session_state.selected_tema == "Todos":
+                df, worksheets_map = load_all_worksheets_data(sheet_url)
+                if df is not None:
                     st.session_state.original_df = df.copy()
-                    st.session_state.worksheet = get_worksheet_for_update(sheet_url, st.session_state.selected_tema)
+                    st.session_state.worksheets_map = worksheets_map
+                    st.session_state.worksheet = None
+            else:
+                df = load_worksheet_data(sheet_url, st.session_state.selected_tema)
+                if df is not None:
+                    required_columns = ['Assunto', 'Pergunta', 'Resposta', 'Resultado', 'Data']
+                    missing_columns = [col for col in required_columns if col not in df.columns]
+
+                    if missing_columns:
+                        st.error(f"Colunas faltando: {', '.join(missing_columns)}")
+                    else:
+                        st.session_state.original_df = df.copy()
+                        st.session_state.worksheet = get_worksheet_for_update(sheet_url, st.session_state.selected_tema)
+
+    if st.session_state.original_df is not None:
+        last_review = get_theme_last_review_date(st.session_state.original_df)
+        if last_review:
+            st.caption(f"Visto pela última vez em: {last_review}")
+
+    with st.expander("Filtros Avançados"):
+        filter_col1, filter_col2 = st.columns(2)
+        with filter_col1:
+            status_options = ["Nunca respondidas", "Acertei", "Errei", "Posso melhorar"]
+            status_filter = st.multiselect("Filtrar por Status", options=status_options, key="status_filter_select")
+        with filter_col2:
+            recency_options = ["Todas", "Hoje", "Esta Semana", "Este Mês", "Há mais de 2 meses"]
+            recency_filter = st.selectbox("Filtrar por Recência", options=recency_options, key="recency_filter_select")
+        
+        if status_filter != st.session_state.status_filter or recency_filter != st.session_state.recency_filter:
+            st.session_state.status_filter = status_filter
+            st.session_state.recency_filter = recency_filter
+            st.session_state.selected_assunto = None
+            reset_quiz_state()
 
     with col3:
         if st.session_state.original_df is not None:
-            unique_assuntos = sorted(st.session_state.original_df['Assunto'].dropna().unique().tolist())
+            working_df = st.session_state.original_df.copy()
+            
+            if st.session_state.status_filter:
+                working_df = apply_status_filter(working_df, st.session_state.status_filter)
+            if st.session_state.recency_filter != "Todas":
+                working_df = apply_recency_filter(working_df, st.session_state.recency_filter)
+            
+            unique_assuntos = sorted(working_df['Assunto'].dropna().unique().tolist())
             assunto_options = ["Tudo"] + [str(a) for a in unique_assuntos]
 
             selected_assunto = st.selectbox(
@@ -485,13 +669,21 @@ def render_study_content():
                 reset_quiz_state()
 
                 if selected_assunto == "Tudo":
-                    st.session_state.filtered_df = st.session_state.original_df.reset_index(drop=True)
-                    st.session_state.row_mapping = list(range(len(st.session_state.original_df)))
+                    filtered = working_df.copy()
+                    original_indices = working_df.index.tolist()
                 else:
-                    mask = st.session_state.original_df['Assunto'].astype(str) == selected_assunto
-                    original_indices = st.session_state.original_df[mask].index.tolist()
-                    st.session_state.filtered_df = st.session_state.original_df[mask].reset_index(drop=True)
-                    st.session_state.row_mapping = original_indices
+                    mask = working_df['Assunto'].astype(str) == selected_assunto
+                    filtered = working_df[mask].copy()
+                    original_indices = working_df[mask].index.tolist()
+                
+                filtered = filtered.reset_index(drop=True)
+                st.session_state.filtered_df = filtered
+                st.session_state.row_mapping = original_indices
+                
+                if '_source_sheet' in filtered.columns:
+                    st.session_state.source_sheet_mapping = filtered['_source_sheet'].tolist()
+                else:
+                    st.session_state.source_sheet_mapping = []
 
     st.divider()
 
@@ -531,9 +723,40 @@ def render_quiz_mode():
             st.rerun()
         return
 
+    nav_col1, nav_col2 = st.columns([1, 3])
+    with nav_col1:
+        total = len(df)
+        jump_to = st.number_input(
+            "Ir para questão nº",
+            min_value=1,
+            max_value=total,
+            value=st.session_state.question_index + 1,
+            key="jump_to_question_input"
+        )
+        if jump_to != st.session_state.question_index + 1:
+            st.session_state.question_index = jump_to - 1
+            st.session_state.show_result = False
+            st.session_state.user_answer = ""
+            st.rerun()
+
     current_row = df.iloc[st.session_state.question_index]
 
+    last_result = str(current_row.get('Resultado', '')).strip()
+    last_date = str(current_row.get('Data', '')).strip()
+    
+    if last_date or last_result:
+        meta_parts = []
+        if last_date:
+            meta_parts.append(f"Última revisão: {last_date[:10]}")
+        if last_result:
+            meta_parts.append(f"Último resultado: {last_result}")
+        st.caption(" | ".join(meta_parts))
+
     st.markdown(f"**Assunto:** {current_row['Assunto']}")
+    
+    if '_source_sheet' in current_row:
+        st.caption(f"Tema: {current_row['_source_sheet']}")
+    
     st.markdown("### Pergunta")
     st.markdown(f"> {current_row['Pergunta']}")
 

@@ -34,6 +34,7 @@ A high-performance Streamlit-based Learning Management System (LMS) that integra
 3. **Resposta** - Reference Answer
 4. **Resultado** - Result (updated by app)
 5. **Data** - Date (updated by app)
+6. **Minha_Resposta** - User's answer (auto-created, saved on submit)
 
 ### Trilha Worksheet
 Tracks study missions with Status column (set to "sim" when complete)
@@ -73,6 +74,7 @@ streamlit run app.py --server.port 5000
 - streamlit-audiorecorder
 
 ## Recent Changes
+- 2024-12-26: Added advanced review features: "Todos" theme aggregation, status/recency filters, jump-to-question navigation, review metadata display, Minha_Resposta column storage
 - 2024-12-25: Major rebuild as Study Station LMS with timer, Spotify, AI consultant, Trilha dashboard, quiz/essay modes
 - 2024-12-25: Added advanced filtering with discipline, tema, and assunto selection
 - 2024-12-24: Initial creation of Active Recall Study Tool
