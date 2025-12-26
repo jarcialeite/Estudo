@@ -10,9 +10,30 @@ from openai import OpenAI
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+import time
+from functools import wraps
+
+# --- SILENCIADOR DE ERROS DE COTA ---
+def retry_on_quota(func):
+    """Tenta executar a função novamente se der erro de cota do Google."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        for _ in range(3): # Tenta 3 vezes antes de desistir
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                erro = str(e).lower()
+                if "quota" in erro or "429" in erro:
+                    time.sleep(2) # Espera respirar
+                    continue
+                else:
+                    raise e
+        return func(*args, **kwargs)
+    return wrapper
+
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
-    page_title="Study Station LMS",
+    page_title="Meu estudo",
     page_icon="📚",
     layout="wide"
 )
@@ -185,18 +206,21 @@ def get_worksheet_titles(sheet_url):
         st.error(f"Erro ao carregar abas: {str(e)}")
         return []
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300) # Guarda na memória por 5 minutos (conteúdo muda pouco)
+@retry_on_quota
 def load_worksheet_data(sheet_url, worksheet_title):
-    """Load data from a specific worksheet."""
+    """Carrega dados da disciplina com cache agressivo."""
     try:
         client = get_gspread_client()
         spreadsheet = client.open_by_url(sheet_url)
         worksheet = spreadsheet.worksheet(worksheet_title)
         data = worksheet.get_all_records()
         df = pd.DataFrame(data)
+        # Garante coluna de resposta pessoal
+        if 'Minha_Resposta' not in df.columns:
+            df['Minha_Resposta'] = ""
         return df
-    except Exception as e:
-        st.error(f"Erro ao carregar dados: {str(e)}")
+    except Exception:
         return None
 
 def get_worksheet_for_update(sheet_url, worksheet_title):
@@ -340,17 +364,27 @@ def get_or_create_log_worksheet(sheet_url):
         st.error(f"Erro ao acessar Log_Estudos: {str(e)}")
         return None
 
+@retry_on_quota
 def save_study_log(disciplina, minutes):
-    """Save study time to Log_Estudos."""
+    """Salva apenas quando necessário, com proteção de cota."""
     try:
-        worksheet = get_or_create_log_worksheet(TRILHA_SHEET_URL)
-        if worksheet:
-            today = datetime.now().strftime("%Y-%m-%d")
-            worksheet.append_row([today, disciplina, minutes])
-            return True
+        client = get_gspread_client()
+        spreadsheet = client.open_by_url(TRILHA_SHEET_URL)
+        try:
+            ws = spreadsheet.worksheet("Log_Estudos")
+        except:
+            ws = spreadsheet.add_worksheet(title="Log_Estudos", rows=1000, cols=3)
+            ws.update(values=[['Data', 'Disciplina', 'Minutos']], range_name='A1:C1')
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        ws.append_row([today, disciplina, minutes])
+
+        # Limpa o cache para o gráfico atualizar
+        get_study_logs.clear() 
+        return True
     except Exception as e:
-        st.error(f"Erro ao salvar log: {str(e)}")
-    return False
+        st.error(f"Erro ao salvar: {e}")
+        return False
 
 def get_study_logs():
     """Get study logs for the last 7 days."""
@@ -380,22 +414,24 @@ def get_today_study_time():
         pass
     return 0
 
+@st.cache_data(ttl=60) # Guarda na memória por 60 segundos
+@retry_on_quota
 def get_trilha_data():
-    """Get Trilha worksheet data."""
+    """Busca dados da trilha com cache e proteção contra falhas."""
     try:
         client = get_gspread_client()
         spreadsheet = client.open_by_url(TRILHA_SHEET_URL)
+        # Tenta pegar a aba, se não achar retorna None sem travar
         try:
             worksheet = spreadsheet.worksheet("Trilha")
             data = worksheet.get_all_records()
             return pd.DataFrame(data), worksheet
-        except gspread.exceptions.WorksheetNotFound:
-            st.error("ERRO: Aba 'Trilha' não encontrada na planilha. Verifique o nome da aba.")
+        except:
             return None, None
-    except Exception as e:
-        st.error(f"Erro ao conectar na Trilha: {str(e)}")
+    except Exception:
         return None, None
 
+        
 def get_next_mission(df):
     """Find first row where Status is not 'sim'."""
     if df is None or df.empty:
@@ -514,85 +550,94 @@ def get_ai_response(question):
         return f"Erro ao consultar IA: {str(e)}"
 
 def render_sidebar():
-    """Render sidebar with timer, Spotify, and AI consultant."""
     with st.sidebar:
-        st.header("Study Station")
+        st.markdown("### 🏛️ Painel de Controle")
 
-        with st.expander("Cronômetro de Estudos", expanded=True):
-            tab1, tab2 = st.tabs(["Cronômetro", "Manual"])
+        # --- CRONÔMETRO BLINDADO (OFFLINE) ---
+        with st.expander("⏱️ Cronômetro", expanded=True):
+            tab1, tab2 = st.tabs(["Auto", "Manual"])
 
             with tab1:
+                # Mostra o total já cacheado (rápido, não bate no Google)
                 today_time = get_today_study_time()
                 st.metric("Tempo Total Hoje", f"{today_time} min")
 
+                # --- CORREÇÃO DO ERRO COL2 ---
+                # Criamos as colunas ANTES de tentar usá-las
                 col1, col2 = st.columns(2)
+
+                # Lógica 100% Offline enquanto conta
                 with col1:
                     if not st.session_state.timer_running:
-                        if st.button("Iniciar", use_container_width=True):
+                        if st.button("▶️ Iniciar", use_container_width=True):
                             st.session_state.timer_running = True
                             st.session_state.timer_start = datetime.now()
                             st.rerun()
                     else:
-                        st.info(f"Em andamento...")
+                         # Botão visualmente desabilitado ou informativo
+                         st.markdown(f"<div style='text-align:center; padding: 10px; color: #B86E7E; font-weight: bold;'>Em curso...</div>", unsafe_allow_html=True)
 
                 with col2:
                     if st.session_state.timer_running:
-                        if st.button("Parar", use_container_width=True):
-                            if st.session_state.timer_start:
-                                delta = datetime.now() - st.session_state.timer_start
-                                total_seconds = delta.total_seconds()
-                                minutes = max(1, int((total_seconds + 30) / 60))
-                                disciplina = st.session_state.selected_disciplina or "Geral"
-                                save_study_log(disciplina, minutes)
-                                st.success(f"Registrado: {minutes} min")
+                        # Cálculo apenas visual (não toca no Google API)
+                        start = st.session_state.timer_start
+                        mins_decorridos = 0
+                        if start:
+                            delta = datetime.now() - start
+                            mins_decorridos = int(delta.total_seconds() / 60)
+
+                        # Botão de Parar (Só chama o Google AQUI)
+                        if st.button("⏹️ Parar", use_container_width=True):
+                            if start:
+                                delta = datetime.now() - start
+                                final_min = max(1, int(delta.total_seconds() / 60))
+                                disc = st.session_state.selected_disciplina or "Geral"
+
+                                with st.spinner("Salvando..."):
+                                    # Chama a função blindada de salvar
+                                    save_study_log(disc, final_min)
+
+                                st.success(f"+{final_min} min!")
+
                             st.session_state.timer_running = False
                             st.session_state.timer_start = None
+                            time.sleep(1)
                             st.rerun()
 
-                logs_df = get_study_logs()
-                if not logs_df.empty:
-                    daily_sum = logs_df.groupby(logs_df['Data'].dt.strftime("%m/%d"))['Minutos'].sum()
-                    if not daily_sum.empty:
-                        fig, ax = plt.subplots(figsize=(4, 2))
-                        daily_sum.plot(kind='bar', ax=ax, color='#1f77b4')
-                        ax.set_xlabel('')
-                        ax.set_ylabel('Min')
-                        ax.tick_params(axis='x', rotation=45)
-                        plt.tight_layout()
-                        st.pyplot(fig)
-                        plt.close()
+                # Feedback visual do tempo (fora das colunas para destaque)
+                if st.session_state.timer_running and st.session_state.timer_start:
+                    delta = datetime.now() - st.session_state.timer_start
+                    mins = int(delta.total_seconds() / 60)
+                    st.info(f"⏳ Tempo da sessão atual: {mins} min")
 
             with tab2:
-                manual_minutes = st.number_input("Minutos estudados", min_value=1, max_value=480, value=30)
-                manual_date = st.date_input("Data", value=datetime.now())
-                manual_disciplina = st.selectbox("Disciplina", options=list(SHEETS_MAPPING.keys()), key="manual_disc")
+                m_min = st.number_input("Minutos", 1, 480, 30)
+                m_date = st.date_input("Data", datetime.now())
+                m_disc = st.selectbox("Matéria", list(SHEETS_MAPPING.keys()))
+                if st.button("Salvar Manual", use_container_width=True):
+                    with st.spinner("Salvando..."):
+                        save_study_log(m_disc, m_min)
+                    st.success("Salvo!")
 
-                if st.button("Registrar", use_container_width=True):
-                    try:
-                        worksheet = get_or_create_log_worksheet(TRILHA_SHEET_URL)
-                        if worksheet:
-                            worksheet.append_row([manual_date.strftime("%Y-%m-%d"), manual_disciplina, manual_minutes])
-                            st.success("Registrado!")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro: {str(e)}")
+        # --- GRÁFICO ---
+        try:
+            logs = get_study_logs()
+            if not logs.empty:
+                daily = logs.groupby(logs['Data'].dt.strftime("%d/%m"))['Minutos'].sum()
+                st.bar_chart(daily, height=150, color="#B86E7E")
+        except:
+            pass # Se der erro no gráfico, não quebra o app
 
-        with st.expander("Spotify - Petit Journal"):
-            components.iframe(
-                "https://open.spotify.com/embed/show/6k3Udb6eX6o7f0r7yG9sX3?utm_source=generator",
-                height=152
-            )
+        # --- OUTRAS FERRAMENTAS ---
+        with st.expander("🎧 Petit Journal"):
+            components.iframe("https://open.spotify.com/embed/show/6k3Udb6eX6o7f0r7yG9sX3?utm_source=generator", height=152)
 
-        with st.expander("Consultor IA"):
-            ai_question = st.text_area("Dúvida Rápida", placeholder="Digite sua pergunta...", height=100, key="ai_question")
-            if st.button("Perguntar", use_container_width=True):
-                if ai_question.strip():
-                    with st.spinner("Consultando..."):
-                        response = get_ai_response(ai_question)
-                        st.markdown("**Resposta:**")
-                        st.markdown(response)
-                else:
-                    st.warning("Digite uma pergunta.")
+        with st.expander("🧠 Consultor IA"):
+            q = st.text_area("Dúvida Rápida", height=100, placeholder="Pergunte ao tutor...")
+            if st.button("Consultar", use_container_width=True):
+                if q:
+                    with st.spinner("Analisando..."):
+                        st.markdown(get_ai_response(q))
 
 def render_trilha_dashboard():
     """Render the Trilha dashboard showing next mission."""
@@ -981,7 +1026,7 @@ def main():
 
     render_sidebar()
 
-    st.title("Study Station LMS")
+    st.title("Meu estudo")
 
     render_trilha_dashboard()
 

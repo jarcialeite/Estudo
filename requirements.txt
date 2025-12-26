@@ -1,0 +1,9 @@
+streamlit
+pandas
+gspread
+oauth2client
+openai
+thefuzz
+matplotlib
+SpeechRecognition
+streamlit-audiorecorder
