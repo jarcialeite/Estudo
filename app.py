@@ -102,6 +102,78 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
+def apply_custom_style():
+    st.markdown("""
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap');
+
+        h1 {
+            font-family: 'Playfair Display', serif;
+            color: #2C3E50;
+            font-size: 3rem !important;
+            font-weight: 700;
+            text-align: center;
+            border-bottom: 2px solid #E6D2D5;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        
+        h2, h3 {
+            font-family: 'Playfair Display', serif;
+            color: #4A4A4A;
+            font-weight: 400;
+        }
+
+        div[data-testid="stMetric"], div.stInfo, div.stSuccess, div.stWarning, div.stError {
+            background-color: #FFFFFF;
+            border: 1px solid #F0E6E8;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+            padding: 15px;
+        }
+
+        div.stButton > button {
+            background-color: #FFFFFF;
+            color: #B86E7E;
+            border: 1px solid #B86E7E;
+            border-radius: 25px;
+            font-family: 'Source Sans Pro', sans-serif;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        div.stButton > button:hover {
+            background-color: #B86E7E;
+            color: #FFFFFF;
+            border-color: #B86E7E;
+            box-shadow: 0 4px 10px rgba(184, 110, 126, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        div.stButton > button[kind="primary"] {
+            background-color: #B86E7E;
+            color: white;
+            box-shadow: 0 4px 10px rgba(184, 110, 126, 0.2);
+        }
+
+        .stTextArea textarea {
+            background-color: #FFFFFF;
+            border: 1px solid #E0E0E0;
+            border-radius: 10px;
+            font-family: 'Georgia', serif;
+            font-size: 16px;
+        }
+
+        .stProgress > div > div > div > div {
+            background-color: #B86E7E;
+        }
+        
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+        </style>
+    """, unsafe_allow_html=True)
+
 @st.cache_data(ttl=300)
 def get_worksheet_titles(sheet_url):
     """Get all worksheet titles from a spreadsheet."""
@@ -905,6 +977,7 @@ def main():
         st.stop()
 
     init_session_state()
+    apply_custom_style()
 
     render_sidebar()
 
