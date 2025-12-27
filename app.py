@@ -13,6 +13,66 @@ from oauth2client.service_account import ServiceAccountCredentials
 import time
 from functools import wraps
 
+# --- COLAR LOGO APÓS OS IMPORTS E ANTES DO RESTO DO CÓDIGO ---
+
+def evaluate_answer_ai(question, user_answer, reference_answer):
+    """Envia a resposta para a IA avaliar como banca do CACD."""
+    try:
+        # Tenta pegar a chave do ambiente ou dos segredos
+        api_key = os.environ.get("openai_api_key")
+        if not api_key and "openai_api_key" in st.secrets:
+            api_key = st.secrets["openai_api_key"]
+
+        if not api_key:
+            return 0, "Erro: Chave da API OpenAI não configurada."
+
+        client = OpenAI(api_key=api_key)
+
+        prompt = f"""
+        Atue como um examinador rigoroso do CACD (Concurso de Admissão à Carreira de Diplomata).
+
+        PERGUNTA: {question}
+        GABARITO OFICIAL: {reference_answer}
+        RESPOSTA DO CANDIDATO: {user_answer}
+
+        Tarefa:
+        1. Compare a resposta do candidato com o gabarito.
+        2. Avalie se os conceitos jurídicos/históricos/políticos essenciais estão presentes, mesmo que com outras palavras.
+        3. Dê uma nota de 0 a 100 baseada na aderência conceitual.
+        4. Forneça um feedback curto (máximo 3 frases) apontando o que faltou ou o que está excelente.
+
+        Formato OBRIGATÓRIO da resposta (não use markdown, apenas texto puro):
+        NOTA: [apenas o número]
+        FEEDBACK: [seu texto aqui]
+        """
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3, 
+            max_tokens=300
+        )
+
+        content = response.choices[0].message.content
+
+        score = 0
+        feedback = "Sem feedback."
+
+        lines = content.split('\n')
+        for line in lines:
+            if "NOTA:" in line:
+                try:
+                    score = int(line.replace("NOTA:", "").strip())
+                except: score = 0
+            if "FEEDBACK:" in line:
+                feedback = line.replace("FEEDBACK:", "").strip()
+
+        return score, feedback
+
+    except Exception as e:
+        return 0, f"Erro ao conectar com a IA: {str(e)}"
+
+
 # --- SILENCIADOR DE ERROS DE COTA ---
 def retry_on_quota(func):
     """Tenta executar a função novamente se der erro de cota do Google."""
@@ -965,7 +1025,7 @@ def render_study_content():
         with filter_col2:
             recency_options = ["Todas", "Hoje", "Esta Semana", "Este Mês", "Há mais de 2 meses"]
             recency_filter = st.selectbox("Filtrar por Recência", options=recency_options, key="recency_filter_select")
-        
+
         if status_filter != st.session_state.status_filter or recency_filter != st.session_state.recency_filter:
             st.session_state.status_filter = status_filter
             st.session_state.recency_filter = recency_filter
@@ -975,12 +1035,12 @@ def render_study_content():
     with col3:
         if st.session_state.original_df is not None:
             working_df = st.session_state.original_df.copy()
-            
+
             if st.session_state.status_filter:
                 working_df = apply_status_filter(working_df, st.session_state.status_filter)
             if st.session_state.recency_filter != "Todas":
                 working_df = apply_recency_filter(working_df, st.session_state.recency_filter)
-            
+
             unique_assuntos = sorted(working_df['Assunto'].dropna().unique().tolist())
             assunto_options = ["Tudo"] + [str(a) for a in unique_assuntos]
 
@@ -1002,11 +1062,11 @@ def render_study_content():
                     mask = working_df['Assunto'].astype(str) == selected_assunto
                     filtered = working_df[mask].copy()
                     original_indices = working_df[mask].index.tolist()
-                
+
                 filtered = filtered.reset_index(drop=True)
                 st.session_state.filtered_df = filtered
                 st.session_state.row_mapping = original_indices
-                
+
                 if '_source_sheet' in filtered.columns:
                     st.session_state.source_sheet_mapping = filtered['_source_sheet'].tolist()
                 else:
@@ -1032,17 +1092,24 @@ def render_study_content():
         st.progress(min(current / total, 1.0))
         st.caption(f"Questão {min(current, total)} de {total}")
 
+    # AQUI ESTAVA O ERRO: Chamamos as funções, mas elas precisam estar definidas FORA daqui
     if study_mode == "Perguntas":
         render_quiz_mode()
     else:
         render_essay_mode()
 
+
+# --- AGORA SIM: As funções estão coladas na margem esquerda (fora da anterior) ---
+
 def render_quiz_mode():
     """Render the quiz mode interface."""
     df = st.session_state.filtered_df
+    total = len(df)
 
-    if st.session_state.question_index >= len(df):
-        st.success("Você completou todas as questões!")
+    # 1. VERIFICAÇÃO DE CONCLUSÃO (Mudamos para o topo)
+    # Se o índice passou do total, mostra a festa e para a execução AQUI.
+    if st.session_state.question_index >= total:
+        st.success(f"Você completou todas as {total} questões desta seleção!")
         st.balloons()
 
         if st.button("Recomeçar"):
@@ -1050,46 +1117,37 @@ def render_quiz_mode():
             st.rerun()
         return
 
-    nav_col1, nav_col2 = st.columns([1, 3])
-    with nav_col1:
-        total = len(df)
-        jump_to = st.number_input(
-            "Ir para questão nº",
-            min_value=1,
-            max_value=total,
-            value=st.session_state.question_index + 1,
-            key="jump_to_question_input"
+    # 2. BARRA DE NAVEGAÇÃO (Só desenha se não acabou)
+    col_nav1, col_nav2 = st.columns([1, 4])
+    with col_nav1:
+        # Proteção extra: min(...) garante que nunca tente mostrar valor maior que o total
+        safe_current = min(st.session_state.question_index + 1, total)
+
+        idx_visual = st.number_input(
+            "Ir para Questão", 
+            min_value=1, 
+            max_value=total, 
+            value=safe_current
         )
-        if jump_to != st.session_state.question_index + 1:
-            st.session_state.question_index = jump_to - 1
+
+        # Lógica de pular para questão específica
+        idx = idx_visual - 1
+        if idx != st.session_state.question_index:
+            st.session_state.question_index = idx
             st.session_state.show_result = False
             st.session_state.user_answer = ""
+            st.session_state.similarity_score = 0
             st.rerun()
 
     current_row = df.iloc[st.session_state.question_index]
 
-    last_result = str(current_row.get('Resultado', '')).strip()
-    last_date = str(current_row.get('Data', '')).strip()
-    
-    if last_date or last_result:
-        meta_parts = []
-        if last_date:
-            meta_parts.append(f"Última revisão: {last_date[:10]}")
-        if last_result:
-            meta_parts.append(f"Último resultado: {last_result}")
-        st.caption(" | ".join(meta_parts))
-
-    st.markdown(f"**Assunto:** {current_row['Assunto']}")
-    
-    if '_source_sheet' in current_row:
-        st.caption(f"Tema: {current_row['_source_sheet']}")
-    
-    st.markdown("### Pergunta")
-    st.markdown(f"> {current_row['Pergunta']}")
+    # Metadados
+    st.caption(f"Assunto: {current_row['Assunto']} | Status Anterior: {current_row.get('Resultado', 'Novo')}")
+    st.markdown(f"### {current_row['Pergunta']}")
 
     st.markdown("### Sua Resposta")
 
-    input_method = st.radio("Método de entrada", ["Texto", "Voz"], horizontal=True, key="input_method")
+    input_method = st.radio("Método de entrada", ["Texto", "Voz"], horizontal=True, key="input_method", label_visibility="collapsed")
 
     if input_method == "Voz":
         try:
@@ -1097,7 +1155,7 @@ def render_quiz_mode():
             import speech_recognition as sr
             import tempfile
 
-            audio = audiorecorder("Gravar", "Parar")
+            audio = audiorecorder("🎤 Gravar", "⏹️ Parar")
 
             if len(audio) > 0:
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
@@ -1130,10 +1188,11 @@ def render_quiz_mode():
     )
     st.session_state.user_answer = user_answer
 
+    # --- LÓGICA DE BOTÕES E CORREÇÃO ---
     if not st.session_state.show_result:
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("Enviar Resposta", type="primary", use_container_width=True):
+            if st.button("Verificar Resposta", type="primary", use_container_width=True):
                 if user_answer.strip():
                     st.session_state.show_result = True
                     st.rerun()
@@ -1144,40 +1203,45 @@ def render_quiz_mode():
                 next_question()
                 st.rerun()
     else:
-        reference_answer = str(current_row['Resposta'])
-        similarity = fuzz.token_sort_ratio(user_answer.lower(), reference_answer.lower())
-        st.session_state.similarity_score = similarity
+        # CORREÇÃO VIA IA
+        if st.session_state.similarity_score == 0: 
+            with st.spinner("⚖️ A Banca Examinadora está analisando sua resposta..."):
+                nota, feedback = evaluate_answer_ai(
+                    current_row['Pergunta'], 
+                    user_answer, 
+                    str(current_row['Resposta'])
+                )
+                st.session_state.similarity_score = nota
+                st.session_state.ai_feedback = feedback
+        else:
+            nota = st.session_state.similarity_score
+            feedback = getattr(st.session_state, 'ai_feedback', '')
 
         st.markdown("---")
-        st.markdown("### Avaliação")
+        st.markdown(f"### Nota da Banca: **{nota}/100**")
 
-        if similarity >= 80:
-            st.success(f"Pontuação de Similaridade: {similarity}%")
-        elif similarity >= 50:
-            st.warning(f"Pontuação de Similaridade: {similarity}%")
+        if nota >= 80:
+            st.success(f"**Excelente!** {feedback}")
+            st.progress(nota / 100)
+        elif nota >= 50:
+            st.warning(f"**Bom.** {feedback}")
+            st.progress(nota / 100)
         else:
-            st.error(f"Pontuação de Similaridade: {similarity}%")
+            st.error(f"**Insuficiente.** {feedback}")
+            st.progress(nota / 100)
 
-        st.markdown("### Resposta de Referência")
-        st.info(reference_answer)
+        with st.expander("Ver Gabarito Oficial", expanded=False):
+            st.info(f"**Referência:** {current_row['Resposta']}")
 
-        st.markdown("### Como você se saiu?")
-        col1, col2, col3 = st.columns(3)
+        st.markdown("### Registrar Desempenho")
+        c1, c2, c3 = st.columns(3)
 
-        with col1:
-            if st.button("Acertei", type="primary", use_container_width=True):
-                record_result("Acertei")
-                st.rerun()
-
-        with col2:
-            if st.button("Posso melhorar", use_container_width=True):
-                record_result("Posso melhorar")
-                st.rerun()
-
-        with col3:
-            if st.button("Errei", use_container_width=True):
-                record_result("Errei")
-                st.rerun()
+        if c1.button("✅ Acertei", use_container_width=True): 
+            record_result("Acertei")
+        if c2.button("⚠️ Posso melhorar", use_container_width=True): 
+            record_result("Posso melhorar")
+        if c3.button("❌ Errei", use_container_width=True): 
+            record_result("Errei")
 
 def render_essay_mode():
     """Render the essay/dissertativo mode interface."""
@@ -1231,6 +1295,7 @@ def render_essay_mode():
                         st.markdown(f"- **{assunto}**: {resp}")
         else:
             st.warning("Escreva algo antes de avaliar.")
+
 
 def main():
     """Main application entry point."""
