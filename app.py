@@ -451,36 +451,88 @@ def get_trilha_data():
         return None, None
 
         
-def get_next_mission(df):
-    """Find first row where Status is not 'sim'."""
-    if df is None or df.empty:
-        return None, None
+def ensure_tempo_column(worksheet):
+    """Ensure 'Tempo' column exists after 'Data' column in Trilha worksheet."""
+    try:
+        headers = worksheet.row_values(1)
+        if 'Tempo' not in headers:
+            if 'Data' in headers:
+                data_idx = headers.index('Data')
+                new_col_idx = data_idx + 2
+            else:
+                new_col_idx = len(headers) + 1
+            worksheet.update_cell(1, new_col_idx, 'Tempo')
+            return new_col_idx
+        else:
+            return headers.index('Tempo') + 1
+    except Exception as e:
+        st.error(f"Erro ao criar coluna Tempo: {str(e)}")
+        return None
 
-    # Procura coluna de Status de forma flexível
+def get_next_missions(df, count=5):
+    """Find next N rows where Status is not 'sim'."""
+    if df is None or df.empty:
+        return []
+
     status_col = None
     for col in df.columns:
         if 'status' in col.lower():
             status_col = col
             break
 
-    # Se não achar pelo nome, tenta a coluna D (índice 3)
     if status_col is None and len(df.columns) >= 4:
         status_col = df.columns[3]
 
+    pending_missions = []
     if status_col:
         for idx, row in df.iterrows():
             status_val = str(row.get(status_col, '')).lower().strip()
             if status_val != 'sim':
-                return idx, row
+                pending_missions.append((idx, row))
+                if len(pending_missions) >= count:
+                    break
+    return pending_missions
+
+def get_next_mission(df):
+    """Find first row where Status is not 'sim'."""
+    missions = get_next_missions(df, 1)
+    if missions:
+        return missions[0]
     return None, None
 
-def complete_mission(worksheet, row_idx):
-    """Mark mission as complete."""
+def create_new_mission(worksheet, description, disciplina):
+    """Create a new mission in the Trilha worksheet."""
     try:
-        # Atualiza Status (Col 4/D) e Data (Col 5/E)
-        # row_idx + 2 porque a planilha começa em 1 e tem cabeçalho
+        all_values = worksheet.get_all_values()
+        if len(all_values) <= 1:
+            new_id = 1
+        else:
+            ids = []
+            for row in all_values[1:]:
+                try:
+                    ids.append(int(row[0]))
+                except:
+                    pass
+            new_id = max(ids) + 1 if ids else 1
+        
+        new_row = [new_id, description, disciplina, "não", "", ""]
+        worksheet.append_row(new_row)
+        return new_id
+    except Exception as e:
+        st.error(f"Erro ao criar missão: {str(e)}")
+        return None
+
+def complete_mission(worksheet, row_idx, tempo_minutes=None):
+    """Mark mission as complete with optional tempo."""
+    try:
         worksheet.update_cell(row_idx + 2, 4, "sim")
         worksheet.update_cell(row_idx + 2, 5, datetime.now().strftime("%Y-%m-%d"))
+        
+        if tempo_minutes is not None:
+            tempo_col = ensure_tempo_column(worksheet)
+            if tempo_col:
+                worksheet.update_cell(row_idx + 2, tempo_col, tempo_minutes)
+        
         return True
     except Exception as e:
         st.error(f"Erro ao salvar conclusão: {e}")
@@ -551,10 +603,11 @@ def record_result(resultado):
         next_question()
 
 def get_ai_response(question):
-    """Get response from OpenAI."""
+    """Get response from OpenAI using Replit AI integrations."""
     try:
         client = OpenAI(
-            api_key=os.environ.get("openai_api_key"),
+            api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY", os.environ.get("openai_api_key")),
+            base_url=os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL", "https://api.openai.com/v1"),
         )
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -649,7 +702,7 @@ def render_sidebar():
 
         # --- OUTRAS FERRAMENTAS ---
         with st.expander("🎧 Petit Journal"):
-            components.iframe("https://open.spotify.com/embed/show/6k3Udb6eX6o7f0r7yG9sX3?utm_source=generator", height=152)
+            components.iframe("https://open.spotify.com/embed/show/6p0F8xS5hRy5z9a3h5d2gA?utm_source=generator", height=152)
 
         with st.expander("🧠 Consultor IA"):
             q = st.text_area("Dúvida Rápida", height=100, placeholder="Pergunte ao tutor...")
@@ -659,8 +712,21 @@ def render_sidebar():
                         st.markdown(get_ai_response(q))
 
 def render_trilha_dashboard():
-    """Render the Trilha dashboard showing next mission."""
-    st.subheader("Trilha - Próxima Missão")
+    """Render the Trilha dashboard with mission selection and timer."""
+    st.subheader("Trilha - Missões")
+
+    if 'trilha_timer_running' not in st.session_state:
+        st.session_state.trilha_timer_running = False
+    if 'trilha_timer_start' not in st.session_state:
+        st.session_state.trilha_timer_start = None
+    if 'trilha_elapsed_minutes' not in st.session_state:
+        st.session_state.trilha_elapsed_minutes = 0
+    if 'active_mission_idx' not in st.session_state:
+        st.session_state.active_mission_idx = None
+    if 'force_select_mission' not in st.session_state:
+        st.session_state.force_select_mission = None
+    if 'show_create_mission' not in st.session_state:
+        st.session_state.show_create_mission = False
 
     df, worksheet = get_trilha_data()
 
@@ -668,25 +734,150 @@ def render_trilha_dashboard():
         st.info("Nenhuma trilha configurada ou planilha 'Trilha' não encontrada.")
         return
 
-    idx, mission = get_next_mission(df)
+    pending_missions = get_next_missions(df, 5)
+    
+    if st.session_state.force_select_mission:
+        id_col = df.columns[0]
+        found_in_list = any(
+            row.get(id_col) == st.session_state.force_select_mission 
+            for _, row in pending_missions
+        )
+        if not found_in_list:
+            for idx, row in df.iterrows():
+                if row.get(id_col) == st.session_state.force_select_mission:
+                    pending_missions.append((idx, row))
+                    break
 
-    if mission is None:
+    if not pending_missions:
         st.success("Todas as missões foram concluídas!")
+        if st.button("➕ Criar Nova Missão", use_container_width=True):
+            st.session_state.show_create_mission = True
+        if st.session_state.show_create_mission:
+            with st.form("create_mission_form_empty"):
+                new_desc = st.text_input("Descrição da Tarefa")
+                new_disc = st.selectbox("Disciplina", list(SHEETS_MAPPING.keys()))
+                if st.form_submit_button("Criar Missão", type="primary"):
+                    if new_desc.strip():
+                        new_id = create_new_mission(worksheet, new_desc, new_disc)
+                        if new_id:
+                            st.success(f"Missão #{new_id} criada!")
+                            st.session_state.show_create_mission = False
+                            st.session_state.force_select_mission = new_id
+                            if 'mission_selector' in st.session_state:
+                                del st.session_state['mission_selector']
+                            get_trilha_data.clear()
+                            st.rerun()
+                    else:
+                        st.warning("Preencha a descrição.")
         return
 
     desc_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
     disc_col = df.columns[2] if len(df.columns) > 2 else desc_col
+    id_col = df.columns[0]
 
-    description = mission.get(desc_col, "Sem descrição")
-    disciplina = mission.get(disc_col, "")
+    mission_options = []
+    mission_indices = []
+    default_idx = 0
+    
+    for i, (idx, row) in enumerate(pending_missions):
+        desc = row.get(desc_col, "Sem descrição")
+        disc = row.get(disc_col, "")
+        mission_id = row.get(id_col, idx+1)
+        mission_options.append(f"{mission_id}. {desc} ({disc})")
+        mission_indices.append((idx, row, mission_id))
+        
+        if st.session_state.force_select_mission and mission_id == st.session_state.force_select_mission:
+            default_idx = i
+            st.session_state.force_select_mission = None
 
-    col1, col2 = st.columns([4, 1])
+    col1, col2 = st.columns([3, 1])
+    
     with col1:
-        st.info(f"**{description}** ({disciplina})")
+        selected_mission = st.selectbox(
+            "Escolha sua Missão Ativa",
+            options=mission_options,
+            index=default_idx,
+            key="mission_selector"
+        )
+        
+        selected_list_idx = mission_options.index(selected_mission)
+        active_idx, active_row, active_id = mission_indices[selected_list_idx]
+        st.session_state.active_mission_idx = active_idx
+        
+        active_desc = active_row.get(desc_col, "")
+        active_disc = active_row.get(disc_col, "")
+
     with col2:
-        if st.button("✅ Concluir", key="complete_mission", use_container_width=True):
-            if complete_mission(worksheet, idx):
-                st.success("Missão concluída!")
+        if st.button("➕ Nova Missão", use_container_width=True):
+            st.session_state.show_create_mission = not st.session_state.show_create_mission
+
+    if st.session_state.show_create_mission:
+        with st.expander("Criar Nova Missão", expanded=True):
+            with st.form("create_mission_form"):
+                new_desc = st.text_input("Descrição da Tarefa")
+                new_disc = st.selectbox("Disciplina", list(SHEETS_MAPPING.keys()))
+                submitted = st.form_submit_button("Criar Missão", type="primary")
+                if submitted:
+                    if new_desc.strip():
+                        new_id = create_new_mission(worksheet, new_desc, new_disc)
+                        if new_id:
+                            st.success(f"Missão #{new_id} criada!")
+                            st.session_state.show_create_mission = False
+                            st.session_state.force_select_mission = new_id
+                            if 'mission_selector' in st.session_state:
+                                del st.session_state['mission_selector']
+                            get_trilha_data.clear()
+                            st.rerun()
+                    else:
+                        st.warning("Preencha a descrição.")
+
+    st.markdown(f"**Missão Ativa:** {active_desc}")
+    
+    timer_col1, timer_col2, timer_col3 = st.columns([1, 1, 1])
+    
+    with timer_col1:
+        if not st.session_state.trilha_timer_running:
+            total_mins = st.session_state.trilha_elapsed_minutes
+            if total_mins > 0:
+                st.info(f"⏸️ {total_mins} min acumulados")
+            if st.button("▶️ Iniciar Foco", use_container_width=True, type="primary"):
+                st.session_state.trilha_timer_running = True
+                st.session_state.trilha_timer_start = datetime.now()
+                st.rerun()
+        else:
+            elapsed = datetime.now() - st.session_state.trilha_timer_start
+            session_mins = int(elapsed.total_seconds() / 60)
+            total_mins = st.session_state.trilha_elapsed_minutes + session_mins
+            st.info(f"⏳ {total_mins} min")
+    
+    with timer_col2:
+        if st.session_state.trilha_timer_running:
+            if st.button("⏹️ Pausar Timer", use_container_width=True):
+                elapsed = datetime.now() - st.session_state.trilha_timer_start
+                session_mins = max(0, int(elapsed.total_seconds() / 60))
+                st.session_state.trilha_elapsed_minutes += session_mins
+                st.session_state.trilha_timer_running = False
+                st.session_state.trilha_timer_start = None
+                st.rerun()
+    
+    with timer_col3:
+        if st.button("✅ Concluir Missão", use_container_width=True):
+            tempo_min = st.session_state.trilha_elapsed_minutes
+            if st.session_state.trilha_timer_running and st.session_state.trilha_timer_start:
+                elapsed = datetime.now() - st.session_state.trilha_timer_start
+                tempo_min += max(0, int(elapsed.total_seconds() / 60))
+            
+            tempo_min = max(1, tempo_min) if tempo_min > 0 else None
+            
+            if complete_mission(worksheet, active_idx, tempo_min):
+                if tempo_min:
+                    save_study_log(active_disc, tempo_min)
+                st.success(f"Missão concluída!" + (f" (+{tempo_min} min)" if tempo_min else ""))
+                st.session_state.trilha_timer_running = False
+                st.session_state.trilha_timer_start = None
+                st.session_state.trilha_elapsed_minutes = 0
+                st.session_state.active_mission_idx = None
+                get_trilha_data.clear()
                 st.rerun()
             else:
                 st.error("Erro ao concluir missão")
@@ -993,7 +1184,13 @@ def render_essay_mode():
     df = st.session_state.filtered_df
 
     st.markdown("### Modo Dissertativo")
-    st.markdown("Escreva uma redação sobre o assunto selecionado. O sistema verificará a cobertura dos conceitos.")
+    st.markdown("Escreva uma redação cobrindo todos os tópicos listados abaixo. O sistema verificará sua cobertura.")
+
+    with st.expander(f"📋 Tópicos a Abordar ({len(df)} questões)", expanded=True):
+        for idx, row in df.iterrows():
+            st.markdown(f"**{idx+1}.** {row['Assunto']}: {row['Pergunta'][:100]}...")
+
+    st.markdown("---")
 
     essay = st.text_area(
         "Sua redação:",

@@ -1,0 +1,56 @@
+Act as a Senior Python/Streamlit Developer. Refactor `main.py` to implement advanced "Trilha" features, fix API/Auth errors, and enhance UX.
+
+### 1. "Trilha" (Study Track) Advanced Features (PRIORITY)
+Refactor the `render_trilha_dashboard` and data handling logic to include:
+
+* **Dynamic Column Management ("Tempo"):**
+    * Check if the "Trilha" worksheet has a column named "Tempo" (after "Data"). If not, create it programmatically.
+    * This column will store the time spent on that specific task.
+
+* **Mission Selection ("Trocar Missão"):**
+    * Instead of automatically locking onto the first pending task, allow the user to choose.
+    * **Logic:** Fetch the **next 5 pending tasks** (where Status != "sim").
+    * **UI:** Display a `st.selectbox` or `st.radio` allowing the user to select one of these 5 tasks as the "Active Mission".
+
+* **"Create New Mission" Feature:**
+    * Add an option/button "Criar Nova Missão".
+    * **UI:** When clicked, show a form (or expander) with:
+        * Text Input: "Descrição da Tarefa".
+        * Dropdown: "Disciplina" (use keys from `SHEETS_MAPPING`).
+    * **Backend Logic:**
+        * Calculate the new ID: Find the current Max ID in the sheet and add 1.
+        * Append a new row: `[New_ID, Description, Discipline, "não", "", ""]` (leaving Data and Tempo empty).
+        * Auto-select this new mission after creation.
+
+* **Integrated Timer & Completion:**
+    * Beside the Active Mission, show a "Play/Focus" button.
+    * **Timer Logic:** Must be **Offline-First** (using `st.session_state` and `datetime` only) to avoid API Quota errors.
+    * **On Stop/Complete:**
+        1.  Update Column D (Status) to "sim".
+        2.  Update Column E (Data) to current date.
+        3.  **Update the new Column "Tempo"** with the duration recorded by the timer for that specific row.
+        4.  Also append the session to the general "Log_Estudos" tab (Discipline linked to the task).
+
+### 2. Quiz Logic & Flow Enhancements
+Modify `render_quiz`:
+* **Auto-Advance:** When "Acertei/Posso melhorar/Errei" is clicked:
+    1.  Save result.
+    2.  Increment `st.session_state.question_index`.
+    3.  **Clear** `st.session_state.user_answer`.
+    4.  Update the "Jump to Question" number input.
+* **Audio Transcription:**
+    * Insert `SpeechRecognition` result directly into `st.session_state.user_answer`.
+    * Force `language="pt-BR"`.
+
+### 3. Essay Mode (Dissertativa) Overhaul
+* List **ALL** questions available in the current filter at the top.
+* Provide a single large text area for a comprehensive answer covering all topics.
+
+### 4. Spotify & API Fixes
+* **Spotify:** Replace the iframe source with `https://open.spotify.com/embed/show/6p0F8xS5hRy5z9a3h5d2gA?utm_source=generator` using `st.components.v1.iframe`.
+* **Auth Error Fix:** Refactor `complete_mission` and database calls to fix `'AuthorizedSession' object has no attribute '_auth_request'`. Ensure `gspread` client is correctly authorized.
+* **Quota Error Fix:** Apply `@st.cache_data` and a retry mechanism (backoff) to read functions. Ensure the timer **never** calls the API while running, only upon stopping.
+
+### Constraints
+* Maintain the existing "Feminine Diplomatic" CSS (Rose/Ivory theme).
+* Keep everything in `main.py`.
