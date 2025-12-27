@@ -713,7 +713,7 @@ def render_sidebar():
 
 def render_trilha_dashboard():
     """Render the Trilha dashboard with mission selection and timer."""
-    st.subheader("Trilha - Missões")
+    st.subheader("Trilha de estudo")
 
     if 'trilha_timer_running' not in st.session_state:
         st.session_state.trilha_timer_running = False
