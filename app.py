@@ -29,32 +29,31 @@ def evaluate_answer_ai(question, user_answer, reference_answer):
         client = OpenAI(api_key=api_key)
 
         prompt = f"""
-        Atue como um examinador rigoroso do CACD (Concurso de Admissão à Carreira de Diplomata).
+        Atue como um medidor de desempenho nas perguntas a seguir.
 
         PERGUNTA: {question}
-        GABARITO OFICIAL: {reference_answer}
-        RESPOSTA DO CANDIDATO: {user_answer}
+        GABARITO: {reference_answer}
+        RESPOSTA: {user_answer}
 
         Tarefa:
-        1. Compare a resposta do candidato com o gabarito.
-        2. Avalie se os conceitos jurídicos/históricos/políticos essenciais estão presentes, mesmo que com outras palavras.
-        3. Dê uma nota de 0 a 100 baseada na aderência conceitual.
-        4. Forneça um feedback curto (máximo 3 frases) apontando o que faltou ou o que está excelente.
+        1. Compare a resposta com o gabarito.
+        2. Avalie se a resposta condiz com o gabarito.
+        3. Dê uma nota de 0 a 100 baseada na aderência.
+        4. Indique objetivamente se faltou alguma informação (indicar qual[is], em tópicos).
 
-        Formato OBRIGATÓRIO da resposta (não use markdown, apenas texto puro):
+        Formato de saída:
         NOTA: [apenas o número]
-        FEEDBACK: [seu texto aqui]
+        RESULTADO: [seu texto aqui]
         """
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3, 
-            max_tokens=300
+        response = client.responses.create(
+            model="gpt-5-mini",
+            input=prompt,
+            max_output_tokens=300
         )
 
-        content = response.choices[0].message.content
-
+        content = response.output_text
+        
         score = 0
         feedback = "Sem feedback."
 
@@ -63,7 +62,8 @@ def evaluate_answer_ai(question, user_answer, reference_answer):
             if "NOTA:" in line:
                 try:
                     score = int(line.replace("NOTA:", "").strip())
-                except: score = 0
+                except (ValueError, TypeError): 
+                    score = 0
             if "FEEDBACK:" in line:
                 feedback = line.replace("FEEDBACK:", "").strip()
 
@@ -111,7 +111,7 @@ def get_credentials():
     try:
         if "gcp_service_account" in st.secrets:
             return json.loads(st.secrets["gcp_service_account"])
-    except:
+    except (ValueError):
         pass # Se der erro aqui, é porque não estamos na nuvem, apenas ignora
 
     return None
@@ -175,6 +175,10 @@ def check_password():
 
 def init_session_state():
     """Initialize all session state variables."""
+    if "sidebar_open" not in st.session_state:
+        st.session_state.sidebar_open = True
+
+
     defaults = {
         'question_index': 0,
         'show_result': False,
@@ -203,6 +207,7 @@ def init_session_state():
             st.session_state[key] = value
 
 def apply_custom_style():
+        
     st.markdown("""
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap');
@@ -359,7 +364,7 @@ def load_all_worksheets_data(sheet_url):
                         df['_original_row_idx'] = list(range(len(df)))
                         all_dfs.append(df)
                         worksheets_map[ws.title] = ws
-            except:
+            except (ValueError):
                 continue
         
         if all_dfs:
@@ -663,30 +668,57 @@ def record_result(resultado):
         next_question()
 
 def get_ai_response(question):
-    """Get response from OpenAI using Replit AI integrations."""
+    """Get response from OpenAI using Responses API (GPT-5-mini)."""
     try:
         client = OpenAI(
-            api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY", os.environ.get("openai_api_key")),
-            base_url=os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            api_key=os.environ.get(
+                "AI_INTEGRATIONS_OPENAI_API_KEY",
+                os.environ.get("openai_api_key")
+            ),
+            base_url=os.environ.get(
+                "AI_INTEGRATIONS_OPENAI_BASE_URL",
+                "https://api.openai.com/v1"
+            ),
         )
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Você é um assistente de estudos especializado no CACD. Responda de forma clara, concisa e jurídica."},
-                {"role": "user", "content": question}
+
+        response = client.responses.create(
+            model="gpt-5-mini",
+            input=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Você é um assistente de estudos especializado no CACD. "
+                                "Responda objetivamente."
+                            )
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": question
+                        }
+                    ]
+                }
             ],
-            max_tokens=500
+            max_output_tokens=500
         )
-        return response.choices[0].message.content
+
+        return response.output_text
+
     except Exception as e:
         return f"Erro ao consultar IA: {str(e)}"
 
-def render_sidebar():
-    with st.sidebar:
-        st.markdown("### 🏛️ Painel de Controle")
 
+def render_sidebar():
+    
         # --- CRONÔMETRO BLINDADO (OFFLINE) ---
-        with st.expander("⏱️ Cronômetro", expanded=True):
+        with st.expander("⏱️ Tempo de estudo", expanded=True):
             tab1, tab2 = st.tabs(["Auto", "Manual"])
 
             with tab1:
@@ -762,7 +794,16 @@ def render_sidebar():
 
         # --- OUTRAS FERRAMENTAS ---
         with st.expander("🎧 Petit Journal"):
-            components.iframe("https://open.spotify.com/embed/show/6p0F8xS5hRy5z9a3h5d2gA?utm_source=generator", height=152)
+            components.iframe(
+                "https://open.spotify.com/embed/show/75MOMlaBaE9Smo2Vp87CO2",
+                height=152
+            )
+
+            st.markdown(
+                "[▶️ Ouvir no Spotify (com login)](https://open.spotify.com/show/75MOMlaBaE9Smo2Vp87CO2)",
+                unsafe_allow_html=True
+            )
+
 
         with st.expander("🧠 Consultor IA"):
             q = st.text_area("Dúvida Rápida", height=100, placeholder="Pergunte ao tutor...")
@@ -1303,6 +1344,7 @@ def main():
         st.stop()
 
     init_session_state()
+
     apply_custom_style()
 
     render_sidebar()

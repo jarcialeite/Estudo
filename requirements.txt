@@ -7,3 +7,5 @@ thefuzz
 matplotlib
 SpeechRecognition
 streamlit-audiorecorder
+google-auth
+requests
