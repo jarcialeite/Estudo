@@ -11,6 +11,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 import time
+import html
 from functools import wraps
 
 # --- COLAR LOGO APÓS OS IMPORTS E ANTES DO RESTO DO CÓDIGO ---
@@ -39,11 +40,14 @@ def evaluate_answer_ai(question, user_answer, reference_answer):
         1. Compare a resposta com o gabarito.
         2. Avalie se a resposta condiz com o gabarito.
         3. Dê uma nota de 0 a 100 baseada na aderência.
-        4. Indique objetivamente se faltou alguma informação (indicar qual[is], em tópicos).
+        4. Gere um feedback curto (1-2 frases) sobre como o candidato se saiu.
+        5. Indique objetivamente semelhanças e diferenças de significado em tópicos curtos.
 
         Formato de saída:
         NOTA: [apenas o número]
-        RESULTADO: [seu texto aqui]
+        RESULTADO: [feedback curto]
+        SEMELHANÇAS: [tópicos curtos]
+        DIFERENÇAS: [tópicos curtos]
         """
 
         response = client.responses.create(
@@ -64,9 +68,12 @@ def evaluate_answer_ai(question, user_answer, reference_answer):
                     score = int(line.replace("NOTA:", "").strip())
                 except (ValueError, TypeError): 
                     score = 0
+            if "RESULTADO:" in line:
+                feedback = line.replace("RESULTADO:", "").strip()
             if "FEEDBACK:" in line:
                 feedback = line.replace("FEEDBACK:", "").strip()
 
+        score = max(0, min(100, score))
         return score, feedback
 
     except Exception as e:
@@ -184,6 +191,8 @@ def init_session_state():
         'show_result': False,
         'user_answer': "",
         'similarity_score': 0,
+        'ai_feedback': "",
+        'answer_input': "",
         'filtered_df': None,
         'worksheet': None,
         'worksheets_map': {},
@@ -198,6 +207,7 @@ def init_session_state():
         'study_mode': "Perguntas",
         'essay_text': "",
         'voice_text': "",
+        'last_audio_hash': None,
         'status_filter': [],
         'recency_filter': "Todas",
         'jump_to_question': 1
@@ -215,7 +225,7 @@ def apply_custom_style():
         h1 {
             font-family: 'Playfair Display', serif;
             color: #2C3E50;
-            font-size: 3rem !important;
+            font-size: 2.4rem !important;
             font-weight: 700;
             text-align: center;
             border-bottom: 2px solid #E6D2D5;
@@ -227,6 +237,29 @@ def apply_custom_style():
             font-family: 'Playfair Display', serif;
             color: #4A4A4A;
             font-weight: 400;
+        }
+
+        .question-card {
+            background: #FFF9FB;
+            border: 1px solid #F0E6E8;
+            border-radius: 18px;
+            padding: 20px 24px;
+            box-shadow: 0 6px 14px rgba(0,0,0,0.04);
+            margin-bottom: 18px;
+        }
+
+        .question-meta {
+            font-family: 'Source Sans Pro', sans-serif;
+            color: #7A6F73;
+            font-size: 0.9rem;
+            margin-bottom: 10px;
+        }
+
+        .question-text {
+            font-family: 'Playfair Display', serif;
+            color: #2F2F2F;
+            font-size: 1.35rem;
+            line-height: 1.6;
         }
 
         div[data-testid="stMetric"], div.stInfo, div.stSuccess, div.stWarning, div.stError {
@@ -266,7 +299,7 @@ def apply_custom_style():
             border: 1px solid #E0E0E0;
             border-radius: 10px;
             font-family: 'Georgia', serif;
-            font-size: 16px;
+            font-size: 15px;
         }
 
         .stProgress > div > div > div > div {
@@ -636,6 +669,9 @@ def reset_quiz_state():
     st.session_state.user_answer = ""
     st.session_state.similarity_score = 0
     st.session_state.voice_text = ""
+    st.session_state.ai_feedback = ""
+    st.session_state.answer_input = ""
+    st.session_state.last_audio_hash = None
 
 def next_question():
     """Move to the next question."""
@@ -644,6 +680,18 @@ def next_question():
     st.session_state.user_answer = ""
     st.session_state.similarity_score = 0
     st.session_state.voice_text = ""
+    st.session_state.ai_feedback = ""
+    st.session_state.answer_input = ""
+    st.session_state.last_audio_hash = None
+
+def format_last_resolution(value):
+    """Format last resolution date for display."""
+    if value is None or str(value).strip() == "":
+        return "Nunca"
+    parsed = pd.to_datetime(value, errors='coerce')
+    if pd.notna(parsed):
+        return parsed.strftime("%d/%m/%Y %H:%M")
+    return str(value)
 
 def record_result(resultado):
     """Record the result and move to the next question."""
@@ -666,6 +714,7 @@ def record_result(resultado):
             st.session_state.filtered_df['Minha_Resposta'] = ''
         st.session_state.filtered_df.at[st.session_state.question_index, 'Minha_Resposta'] = user_answer
         next_question()
+        st.rerun()
 
 def get_ai_response(question):
     """Get response from OpenAI using Responses API (GPT-5-mini)."""
@@ -811,6 +860,7 @@ def render_sidebar():
                 if q:
                     with st.spinner("Analisando..."):
                         st.markdown(get_ai_response(q))
+
 
 def render_trilha_dashboard():
     """Render the Trilha dashboard with mission selection and timer."""
@@ -1178,13 +1228,30 @@ def render_quiz_mode():
             st.session_state.show_result = False
             st.session_state.user_answer = ""
             st.session_state.similarity_score = 0
+            st.session_state.ai_feedback = ""
+            st.session_state.answer_input = ""
+            st.session_state.last_audio_hash = None
             st.rerun()
 
     current_row = df.iloc[st.session_state.question_index]
 
     # Metadados
-    st.caption(f"Assunto: {current_row['Assunto']} | Status Anterior: {current_row.get('Resultado', 'Novo')}")
-    st.markdown(f"### {current_row['Pergunta']}")
+    status_anterior = current_row.get('Resultado', 'Novo') or "Novo"
+    last_resolution = format_last_resolution(current_row.get('Data', ''))
+    question_text = html.escape(str(current_row['Pergunta']))
+    assunto_text = html.escape(str(current_row['Assunto']))
+
+    st.markdown(
+        f"""
+        <div class="question-card">
+            <div class="question-meta">
+                Assunto: {assunto_text} · Status anterior: {html.escape(str(status_anterior))} · Última resolução: {html.escape(last_resolution)}
+            </div>
+            <div class="question-text">{question_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     st.markdown("### Sua Resposta")
 
@@ -1199,21 +1266,24 @@ def render_quiz_mode():
             audio = audiorecorder("🎤 Gravar", "⏹️ Parar")
 
             if len(audio) > 0:
+                audio_hash = hash(audio.raw_data)
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                     audio.export(tmp_file.name, format="wav")
                     tmp_path = tmp_file.name
 
                 st.audio(tmp_path, format="audio/wav")
 
-                if st.button("Transcrever"):
-                    with st.spinner("Transcrevendo..."):
+                if st.session_state.last_audio_hash != audio_hash:
+                    with st.spinner("Transcrevendo automaticamente..."):
                         try:
                             recognizer = sr.Recognizer()
                             with sr.AudioFile(tmp_path) as source:
                                 audio_data = recognizer.record(source)
                             text = recognizer.recognize_google(audio_data, language="pt-BR")
+                            st.session_state.last_audio_hash = audio_hash
                             st.session_state.voice_text = text
                             st.session_state.user_answer = text
+                            st.session_state.answer_input = text
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro na transcrição: {str(e)}")
@@ -1222,7 +1292,7 @@ def render_quiz_mode():
 
     user_answer = st.text_area(
         "Digite sua resposta aqui:",
-        value=st.session_state.user_answer,
+        value=st.session_state.answer_input,
         height=150,
         key="answer_input",
         label_visibility="collapsed"
@@ -1259,7 +1329,7 @@ def render_quiz_mode():
             feedback = getattr(st.session_state, 'ai_feedback', '')
 
         st.markdown("---")
-        st.markdown(f"### Nota da Banca: **{nota}/100**")
+        st.markdown(f"### Conformidade com o gabarito: **{nota}/100**")
 
         if nota >= 80:
             st.success(f"**Excelente!** {feedback}")
