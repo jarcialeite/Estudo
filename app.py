@@ -41,45 +41,50 @@ def evaluate_answer_ai(question, user_answer, reference_answer):
         2. Avalie se a resposta condiz com o gabarito.
         3. Dê uma nota de 0 a 100 baseada na aderência.
         4. Gere um feedback curto (1-2 frases) sobre como o candidato se saiu.
-        5. Indique objetivamente semelhanças e diferenças de significado em tópicos curtos.
 
-        Formato de saída:
-        NOTA: [apenas o número]
-        RESULTADO: [feedback curto]
-        SEMELHANÇAS: [tópicos curtos]
-        DIFERENÇAS: [tópicos curtos]
+        Formato OBRIGATÓRIO de saída:
+        NOTA: [número]
+        FEEDBACK: [texto]
         """
 
-        response = client.responses.create(
-            model="gpt-5-mini",
-            input=prompt,
-            max_output_tokens=300
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=300
         )
 
-        content = response.output_text
-        
-        score = None
+        # --- CORREÇÃO AQUI: Garante que content nunca seja None ---
+        # O 'or ""' transforma None em string vazia, resolvendo o erro do Pyright
+        content = response.choices[0].message.content or ""
+
+        # --- LÓGICA DE EXTRAÇÃO BLINDADA ---
+        import re
+
+        score = 0 
         feedback = "Sem feedback."
 
-        lines = content.split('\n')
-        for line in lines:
+        # Tenta achar "NOTA: 85" ou "NOTA:85" usando Regex
+        match_nota = re.search(r"NOTA:\s*(\d+)", content, re.IGNORECASE)
+        if match_nota:
+            score = int(match_nota.group(1))
 
-            if "NOTA" in line:
-                numbers = [int(n) for n in line.replace("%", " ").split() if n.isdigit()]
-                if numbers:
-                    score = numbers[0]
-
-            if "RESULTADO:" in line:
-                feedback = line.replace("RESULTADO:", "").strip()
-            if "FEEDBACK:" in line:
-                feedback = line.replace("FEEDBACK:", "").strip()
+        # Tenta achar o feedback com verificações seguras
+        if "FEEDBACK:" in content:
+            parts = content.split("FEEDBACK:")
+            if len(parts) > 1:
+                feedback = parts[1].strip().split("\n")[0]
+        elif "RESULTADO:" in content: 
+            parts = content.split("RESULTADO:")
+            if len(parts) > 1:
+                feedback = parts[1].strip().split("\n")[0]
 
         score = max(0, min(100, score))
+
         return score, feedback
 
     except Exception as e:
         return 0, f"Erro ao conectar com a IA: {str(e)}"
-
 
 # --- SILENCIADOR DE ERROS DE COTA ---
 def retry_on_quota(func):
@@ -183,6 +188,9 @@ def check_password():
 
 def init_session_state():
     """Initialize all session state variables."""
+    if "consultor_ai_resposta" not in st.session_state:
+        st.session_state.consultor_ai_resposta = ""
+    
     if "sidebar_open" not in st.session_state:
         st.session_state.sidebar_open = True
 
@@ -721,11 +729,14 @@ def record_result(resultado):
 def get_ai_response(question):
     """Get response from OpenAI using Responses API (GPT-5-mini)."""
     try:
+        api_key = (
+            os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+            or os.environ.get("openai_api_key")
+            or os.environ.get("OPENAI_API_KEY")
+        )
+
         client = OpenAI(
-            api_key=os.environ.get(
-                "AI_INTEGRATIONS_OPENAI_API_KEY",
-                os.environ.get("openai_api_key")
-            ),
+            api_key=api_key,
             base_url=os.environ.get(
                 "AI_INTEGRATIONS_OPENAI_BASE_URL",
                 "https://api.openai.com/v1"
@@ -737,24 +748,11 @@ def get_ai_response(question):
             input=[
                 {
                     "role": "system",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": (
-                                "Você é um assistente de estudos especializado no CACD. "
-                                "Responda objetivamente."
-                            )
-                        }
-                    ]
+                    "content": [{"type": "input_text", "text": "Você é um assistente de estudos especializado no CACD. Responda objetivamente."}]
                 },
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": question
-                        }
-                    ]
+                    "content": [{"type": "input_text", "text": question}]
                 }
             ],
             max_output_tokens=500
@@ -855,13 +853,18 @@ def render_sidebar():
                 unsafe_allow_html=True
             )
 
+        with st.expander("🧠 Consultor IA", expanded=True):
+            q = st.text_area("Dúvida Rápida", height=100, placeholder="Pergunte ao tutor...", key="consultor_ai_q")
 
-        with st.expander("🧠 Consultor IA"):
-            q = st.text_area("Dúvida Rápida", height=100, placeholder="Pergunte ao tutor...")
-            if st.button("Consultar", use_container_width=True):
-                if q:
+            if st.button("Consultar", use_container_width=True, key="consultor_ai_btn"):
+                if q.strip():
                     with st.spinner("Analisando..."):
-                        st.markdown(get_ai_response(q))
+                        st.session_state.consultor_ai_resposta = get_ai_response(q)
+                else:
+                    st.warning("Digite uma pergunta.")
+
+            if st.session_state.consultor_ai_resposta:
+                st.markdown(st.session_state.consultor_ai_resposta)
 
 
 def render_trilha_dashboard():
