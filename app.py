@@ -58,16 +58,17 @@ def evaluate_answer_ai(question, user_answer, reference_answer):
 
         content = response.output_text
         
-        score = 0
+        score = None
         feedback = "Sem feedback."
 
         lines = content.split('\n')
         for line in lines:
-            if "NOTA:" in line:
-                try:
-                    score = int(line.replace("NOTA:", "").strip())
-                except (ValueError, TypeError): 
-                    score = 0
+
+            if "NOTA" in line:
+                numbers = [int(n) for n in line.replace("%", " ").split() if n.isdigit()]
+                if numbers:
+                    score = numbers[0]
+
             if "RESULTADO:" in line:
                 feedback = line.replace("RESULTADO:", "").strip()
             if "FEEDBACK:" in line:
@@ -190,9 +191,10 @@ def init_session_state():
         'question_index': 0,
         'show_result': False,
         'user_answer': "",
-        'similarity_score': 0,
+        'similarity_score': None,
         'ai_feedback': "",
         'answer_input': "",
+        'pending_clear_answer': False,
         'filtered_df': None,
         'worksheet': None,
         'worksheets_map': {},
@@ -667,10 +669,10 @@ def reset_quiz_state():
     st.session_state.question_index = 0
     st.session_state.show_result = False
     st.session_state.user_answer = ""
-    st.session_state.similarity_score = 0
+    st.session_state.similarity_score = None
     st.session_state.voice_text = ""
     st.session_state.ai_feedback = ""
-    st.session_state.answer_input = ""
+    st.session_state.pending_clear_answer = True
     st.session_state.last_audio_hash = None
 
 def next_question():
@@ -678,10 +680,10 @@ def next_question():
     st.session_state.question_index += 1
     st.session_state.show_result = False
     st.session_state.user_answer = ""
-    st.session_state.similarity_score = 0
+    st.session_state.similarity_score = None
     st.session_state.voice_text = ""
     st.session_state.ai_feedback = ""
-    st.session_state.answer_input = ""
+    st.session_state.pending_clear_answer = True
     st.session_state.last_audio_hash = None
 
 def format_last_resolution(value):
@@ -1227,9 +1229,11 @@ def render_quiz_mode():
             st.session_state.question_index = idx
             st.session_state.show_result = False
             st.session_state.user_answer = ""
-            st.session_state.similarity_score = 0
+
+            st.session_state.similarity_score = None
             st.session_state.ai_feedback = ""
-            st.session_state.answer_input = ""
+            st.session_state.pending_clear_answer = True
+
             st.session_state.last_audio_hash = None
             st.rerun()
 
@@ -1290,6 +1294,10 @@ def render_quiz_mode():
         except Exception as e:
             st.warning("Gravação de voz não disponível.")
 
+    if st.session_state.pending_clear_answer:
+        st.session_state.answer_input = ""
+        st.session_state.pending_clear_answer = False
+
     user_answer = st.text_area(
         "Digite sua resposta aqui:",
         value=st.session_state.answer_input,
@@ -1315,7 +1323,7 @@ def render_quiz_mode():
                 st.rerun()
     else:
         # CORREÇÃO VIA IA
-        if st.session_state.similarity_score == 0: 
+        if st.session_state.similarity_score is None: 
             with st.spinner("⚖️ A Banca Examinadora está analisando sua resposta..."):
                 nota, feedback = evaluate_answer_ai(
                     current_row['Pergunta'], 
